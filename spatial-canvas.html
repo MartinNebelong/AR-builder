@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Spatial Canvas — AR image collage</title>
+<style>
+  :root{
+    --bg:#0b0d0e; --panel:rgba(14,17,18,.86); --ink:#e8ecec;
+    --dim:#8a9494; --accent:#ffb43a; --line:rgba(232,236,236,.14);
+  }
+  *{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace;
+    font-size:14px; overflow:hidden;
+  }
+  button{
+    font:inherit; color:var(--ink); background:transparent;
+    border:1px solid var(--line); border-radius:8px; padding:10px 14px;
+  }
+  button.primary{background:var(--accent); color:#141414; border-color:var(--accent); font-weight:600;}
+  button:disabled{opacity:.4;}
+  input,textarea{
+    font:inherit; color:var(--ink); background:rgba(255,255,255,.05);
+    border:1px solid var(--line); border-radius:8px; padding:10px 12px; width:100%;
+  }
+  textarea{resize:none; height:72px;}
+
+  /* ---------- landing ---------- */
+  #landing{
+    position:fixed; inset:0; display:flex; flex-direction:column;
+    justify-content:center; gap:14px; padding:28px; max-width:520px; margin:0 auto;
+  }
+  #landing h1{font-size:22px; font-weight:600; letter-spacing:.02em;}
+  #landing h1 span{color:var(--accent);}
+  #landing p{color:var(--dim); line-height:1.5; font-size:13px;}
+  #landing .field label{display:block; color:var(--dim); font-size:12px; margin-bottom:6px;}
+  #support{font-size:12px; color:var(--dim);}
+
+  /* ---------- AR overlay ---------- */
+  #overlay{position:fixed; inset:0; display:none; touch-action:none;}
+  #overlay.active{display:block;}
+
+  #topbar{
+    position:absolute; top:0; left:0; right:0; padding:12px 14px;
+    display:flex; justify-content:space-between; align-items:center;
+    pointer-events:none;
+  }
+  #topbar .tag{font-size:12px; letter-spacing:.08em; color:var(--ink);
+    text-shadow:0 1px 3px rgba(0,0,0,.6);}
+  #exitBtn{pointer-events:auto; padding:6px 12px; font-size:12px;
+    background:var(--panel); backdrop-filter:blur(6px);}
+
+  #hint{
+    position:absolute; bottom:18px; left:50%; transform:translateX(-50%);
+    background:var(--panel); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:999px;
+    padding:8px 16px; font-size:12px; color:var(--dim);
+    white-space:nowrap; max-width:92vw; overflow:hidden; text-overflow:ellipsis;
+  }
+  #hint.busy{color:var(--accent);}
+
+  /* focus-frame while drawing */
+  #rect{position:absolute; display:none; pointer-events:none;}
+  #rect .c{position:absolute; width:18px; height:18px; border:2px solid var(--accent);}
+  #rect .tl{top:0; left:0; border-right:0; border-bottom:0;}
+  #rect .tr{top:0; right:0; border-left:0; border-bottom:0;}
+  #rect .bl{bottom:0; left:0; border-right:0; border-top:0;}
+  #rect .br{bottom:0; right:0; border-left:0; border-top:0;}
+  #rect .fill{position:absolute; inset:0; background:rgba(255,180,58,.08);}
+
+  /* prompt / edit panel */
+  #panel{
+    position:absolute; left:12px; right:12px; bottom:64px;
+    background:var(--panel); backdrop-filter:blur(10px);
+    border:1px solid var(--line); border-radius:14px;
+    padding:14px; display:none; flex-direction:column; gap:10px;
+  }
+  #panel.open{display:flex;}
+  #panel .row{display:flex; gap:8px;}
+  #panel .row button{flex:1; font-size:13px; padding:9px 6px;}
+  #panel .lbl{font-size:11px; color:var(--dim); letter-spacing:.06em;}
+</style>
+</head>
+<body>
+
+<!-- ============ LANDING ============ -->
+<div id="landing">
+  <h1>Spatial <span>Canvas</span></h1>
+  <p>Walk around, frame a rectangle with your finger, generate an image with
+     Nano Banana 2, cut out the part you want, and pin it in your room.
+     Tap a plane once to carry it with the phone, tap again to place it.</p>
+  <div class="field">
+    <label>fal.ai API key (stored only on this device)</label>
+    <input id="falKey" type="password" placeholder="key_id:key_secret" autocomplete="off">
+  </div>
+  <button id="startBtn" class="primary">Enter AR</button>
+  <div id="support">Checking WebXR support…</div>
+</div>
+
+<!-- ============ AR OVERLAY ============ -->
+<div id="overlay">
+  <div id="topbar">
+    <div class="tag">SPATIAL CANVAS</div>
+    <button id="exitBtn">Exit</button>
+  </div>
+
+  <div id="rect">
+    <div class="fill"></div>
+    <div class="c tl"></div><div class="c tr"></div>
+    <div class="c bl"></div><div class="c br"></div>
+  </div>
+
+  <div id="panel">
+    <div class="lbl" id="panelTitle">GENERATE IMAGE</div>
+    <textarea id="prompt" placeholder="Describe the image…"></textarea>
+    <div class="row">
+      <button id="genBtn" class="primary">Generate</button>
+      <button id="cutBtn">Cutout</button>
+    </div>
+    <div class="row">
+      <button id="delBtn">Delete</button>
+      <button id="closeBtn">Close</button>
+    </div>
+  </div>
+
+  <div id="hint">Draw a rectangle to begin</div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ================= config ================= */
+const GEN_ENDPOINT = 'fal-ai/nano-banana-2';        // text-to-image
+const CUT_ENDPOINT = 'fal-ai/birefnet/v2';          // background removal → transparent PNG
+const AR_RATIOS = {'21:9':21/9,'16:9':16/9,'3:2':3/2,'4:3':4/3,'5:4':5/4,
+                   '1:1':1,'4:5':4/5,'3:4':3/4,'2:3':2/3,'9:16':9/16};
+
+/* ================= dom ================= */
+const $ = id => document.getElementById(id);
+const landing=$('landing'), overlay=$('overlay'), hint=$('hint'),
+      rectEl=$('rect'), panel=$('panel'), promptEl=$('prompt');
+
+let falKey = '';
+try { falKey = localStorage.getItem('falKey') || ''; $('falKey').value = falKey; } catch(e){}
+
+/* WebXR support check */
+if (navigator.xr) {
+  navigator.xr.isSessionSupported('immersive-ar').then(ok=>{
+    $('support').textContent = ok ? 'WebXR AR supported on this device ✓'
+      : 'immersive-ar not supported — use Chrome on an ARCore phone.';
+    $('startBtn').disabled = !ok;
+  });
+} else {
+  $('support').textContent = 'WebXR not available. Open this page over HTTPS in Chrome on Android.';
+  $('startBtn').disabled = true;
+}
+
+/* ================= three ================= */
+let renderer, scene, camera, session=null, viewerSpace=null;
+const quads = [];           // all placed planes
+let held = null;            // quad currently attached to the phone
+let heldOffset = new THREE.Matrix4();
+let selected = null;        // quad the panel is editing
+let busy = false;
+
+function initThree(){
+  renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.xr.enabled = true;
+  document.body.appendChild(renderer.domElement);
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera();
+}
+initThree();
+
+const setHint = (t, isBusy=false)=>{ hint.textContent=t; hint.classList.toggle('busy',isBusy); };
+
+/* ================= session ================= */
+$('startBtn').onclick = async ()=>{
+  falKey = $('falKey').value.trim();
+  if (!falKey) { $('support').textContent='Paste your fal.ai API key first.'; return; }
+  try { localStorage.setItem('falKey', falKey); } catch(e){}
+  try {
+    session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures:['hit-test','dom-overlay'],
+      domOverlay:{root:overlay}
+    });
+  } catch(err){ $('support').textContent='Could not start AR: '+err.message; return; }
+
+  landing.style.display='none';
+  overlay.classList.add('active');
+  renderer.xr.setReferenceSpaceType('local');
+  await renderer.xr.setSession(session);
+  viewerSpace = await session.requestReferenceSpace('viewer');
+  session.addEventListener('end', onEnd);
+  renderer.setAnimationLoop(onFrame);
+  setHint('Draw a rectangle to begin');
+};
+$('exitBtn').onclick = ()=> session && session.end();
+function onEnd(){
+  renderer.setAnimationLoop(null);
+  overlay.classList.remove('active');
+  landing.style.display='flex';
+  quads.forEach(q=>scene.remove(q)); quads.length=0;
+  held=null; selected=null; closePanel();
+}
+
+/* ================= one-shot hit test through a screen point ================= */
+const pendingHits = [];   // {source, frames, resolve}
+async function hitTestAtNDC(nx, ny){
+  const cam = renderer.xr.getCamera();
+  const c = cam.cameras && cam.cameras.length ? cam.cameras[0] : cam;
+  // ray direction in viewer space through NDC point
+  const v = new THREE.Vector3(nx, ny, -1).applyMatrix4(c.projectionMatrixInverse).normalize();
+  let source;
+  try {
+    source = await session.requestHitTestSource({
+      space: viewerSpace,
+      offsetRay: new XRRay(new DOMPointReadOnly(0,0,0,1), {x:v.x, y:v.y, z:v.z, w:0})
+    });
+  } catch(e){ return null; }
+  return new Promise(resolve=> pendingHits.push({source, frames:0, resolve}));
+}
+
+/* ================= frame loop ================= */
+function onFrame(t, frame){
+  if (frame){
+    const ref = renderer.xr.getReferenceSpace();
+    for (let i=pendingHits.length-1; i>=0; i--){
+      const h = pendingHits[i];
+      const results = frame.getHitTestResults(h.source);
+      if (results.length){
+        const pose = results[0].getPose(ref);
+        h.source.cancel(); pendingHits.splice(i,1);
+        h.resolve(pose ? new THREE.Vector3(pose.transform.position.x,
+                                           pose.transform.position.y,
+                                           pose.transform.position.z) : null);
+      } else if (++h.frames > 20){
+        h.source.cancel(); pendingHits.splice(i,1); h.resolve(null);
+      }
+    }
+  }
+  // carried plane follows the phone
+  if (held){
+    const cam = renderer.xr.getCamera();
+    const m = new THREE.Matrix4().multiplyMatrices(cam.matrixWorld, heldOffset);
+    m.decompose(held.position, held.quaternion, held.scale);
+  }
+  renderer.render(scene, camera);
+}
+
+/* ================= quads ================= */
+function makeQuad(widthM, heightM, pos, camPos){
+  const geo = new THREE.PlaneGeometry(widthM, heightM);
+  const mat = new THREE.MeshBasicMaterial({
+    color:0xffb43a, transparent:true, opacity:0.22, side:THREE.DoubleSide
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  const frame = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geo),
+    new THREE.LineBasicMaterial({color:0xffb43a})
+  );
+  mesh.add(frame);
+  mesh.userData = {frame, w:widthM, h:heightM, imageUrl:null, lastTap:0};
+  mesh.position.copy(pos);
+  const yaw = Math.atan2(camPos.x-pos.x, camPos.z-pos.z);
+  mesh.quaternion.setFromEuler(new THREE.Euler(0, yaw, 0));
+  scene.add(mesh);
+  quads.push(mesh);
+  return mesh;
+}
+function setSelected(q){
+  selected = q;
+  quads.forEach(o=>o.userData.frame.material.color.set(o===q?0xffb43a:0x555555));
+}
+function raycastQuads(nx, ny){
+  const cam = renderer.xr.getCamera();
+  const c = cam.cameras && cam.cameras.length ? cam.cameras[0] : cam;
+  const rc = new THREE.Raycaster();
+  rc.setFromCamera(new THREE.Vector2(nx,ny), c);
+  const hits = rc.intersectObjects(quads, false);
+  return hits.length ? hits[0].object : null;
+}
+
+/* ================= touch: draw / grab / place ================= */
+let t0=null, tCur=null, drawing=false;
+const DRAG_PX = 24;
+
+overlay.addEventListener('touchstart', e=>{
+  if (panel.contains(e.target) || e.target.closest('button')) return;
+  const t = e.touches[0];
+  t0 = {x:t.clientX, y:t.clientY}; tCur={...t0}; drawing=false;
+}, {passive:true});
+
+overlay.addEventListener('touchmove', e=>{
+  if (!t0) return;
+  const t = e.touches[0];
+  tCur = {x:t.clientX, y:t.clientY};
+  if (!drawing && Math.hypot(tCur.x-t0.x, tCur.y-t0.y) > DRAG_PX){
+    drawing = true; rectEl.style.display='block';
+  }
+  if (drawing){
+    const x=Math.min(t0.x,tCur.x), y=Math.min(t0.y,tCur.y);
+    rectEl.style.left=x+'px'; rectEl.style.top=y+'px';
+    rectEl.style.width=Math.abs(tCur.x-t0.x)+'px';
+    rectEl.style.height=Math.abs(tCur.y-t0.y)+'px';
+  }
+}, {passive:true});
+
+overlay.addEventListener('touchend', async ()=>{
+  if (!t0) return;
+  const start=t0, end=tCur; t0=null;
+  rectEl.style.display='none';
+
+  const toNDC = p => ({x:(p.x/innerWidth)*2-1, y:-(p.y/innerHeight)*2+1});
+
+  if (!drawing){                       /* ---- tap: grab / place ---- */
+    const n = toNDC(end);
+    const q = raycastQuads(n.x, n.y);
+    if (!q) return;
+    const now = performance.now();
+    if (now - q.userData.lastTap < 350){        // double-tap → edit panel
+      q.userData.lastTap = 0;
+      if (held===q){ placeHeld(); }
+      setSelected(q); openPanel(q); return;
+    }
+    q.userData.lastTap = now;
+    setTimeout(()=>{                            // single tap after delay
+      if (q.userData.lastTap !== now) return;
+      if (held === q){ placeHeld(); }
+      else if (!held){
+        const cam = renderer.xr.getCamera();
+        heldOffset.copy(cam.matrixWorld).invert().multiply(q.matrixWorld);
+        held = q; setSelected(q);
+        setHint('Move your phone — tap the plane again to place it');
+      }
+    }, 360);
+    return;
+  }
+
+  /* ---- drag: create a plane from the drawn rectangle ---- */
+  drawing = false;
+  const w = Math.abs(end.x-start.x), h = Math.abs(end.y-start.y);
+  if (w<30 || h<30) return;
+  const cx=(start.x+end.x)/2, cy=(start.y+end.y)/2;
+  const n = toNDC({x:cx,y:cy});
+  setHint('Mapping surface…', true);
+  let pos = await hitTestAtNDC(n.x, n.y);
+  const cam = renderer.xr.getCamera();
+  const c = cam.cameras && cam.cameras.length ? cam.cameras[0] : cam;
+  const camPos = new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
+  if (!pos){  // fallback: 1.5 m along the ray
+    const dir = new THREE.Vector3(n.x,n.y,-1).applyMatrix4(c.projectionMatrixInverse)
+                  .normalize().transformDirection(c.matrixWorld);
+    pos = camPos.clone().addScaledVector(dir, 1.5);
+  }
+  const dist = camPos.distanceTo(pos);
+  const fovY = 2*Math.atan(1/c.projectionMatrix.elements[5]);
+  const worldH = 2*dist*Math.tan(fovY/2)*(h/innerHeight);
+  const worldW = worldH*(w/h);
+  const quad = makeQuad(worldW, worldH, pos, camPos);
+  setSelected(quad);
+  openPanel(quad);
+  setHint('Describe what should appear in the frame');
+});
+
+function placeHeld(){
+  if (!held) return;
+  held.updateMatrixWorld(true);
+  held = null;
+  setHint('Placed. Tap to pick up again, double-tap to edit');
+}
+
+/* ================= panel ================= */
+function openPanel(q){
+  $('panelTitle').textContent = q.userData.imageUrl ? 'EDIT PLANE' : 'GENERATE IMAGE';
+  $('cutBtn').disabled = !q.userData.imageUrl;
+  panel.classList.add('open');
+}
+function closePanel(){ panel.classList.remove('open'); }
+$('closeBtn').onclick = closePanel;
+$('delBtn').onclick = ()=>{
+  if (!selected) return;
+  scene.remove(selected);
+  quads.splice(quads.indexOf(selected),1);
+  if (held===selected) held=null;
+  selected=null; closePanel(); setHint('Deleted');
+};
+
+/* ================= fal.ai ================= */
+async function fal(endpoint, body){
+  const res = await fetch('https://fal.run/'+endpoint, {
+    method:'POST',
+    headers:{ 'Authorization':'Key '+falKey, 'Content-Type':'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error('fal '+res.status+': '+(await res.text()).slice(0,140));
+  return res.json();
+}
+const firstImageUrl = d =>
+  d?.images?.[0]?.url || d?.image?.url || null;
+
+function nearestRatio(r){
+  let best='1:1', diff=1e9;
+  for (const [k,v] of Object.entries(AR_RATIOS)){
+    const d=Math.abs(v-r); if (d<diff){diff=d; best=k;}
+  }
+  return best;
+}
+
+async function applyTexture(q, url){
+  const blob = await (await fetch(url)).blob();
+  const objUrl = URL.createObjectURL(blob);
+  const tex = await new THREE.TextureLoader().loadAsync(objUrl);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  q.material.map = tex;
+  q.material.color.set(0xffffff);
+  q.material.opacity = 1;
+  q.material.needsUpdate = true;
+  // match plane to the image's aspect, keep width
+  const imgR = tex.image.width / tex.image.height;
+  q.scale.y = (q.userData.w / imgR) / q.userData.h;
+}
+
+$('genBtn').onclick = async ()=>{
+  if (!selected || busy) return;
+  const p = promptEl.value.trim();
+  if (!p){ setHint('Write a prompt first'); return; }
+  busy=true; $('genBtn').disabled=true;
+  setHint('Generating with Nano Banana 2…', true);
+  try {
+    const q = selected;
+    const data = await fal(GEN_ENDPOINT, {
+      prompt:p, num_images:1, output_format:'png',
+      aspect_ratio: nearestRatio(q.userData.w / q.userData.h)
+    });
+    const url = firstImageUrl(data);
+    if (!url) throw new Error('no image in response');
+    await applyTexture(q, url);
+    q.userData.imageUrl = url;
+    $('cutBtn').disabled = false;
+    setHint('Done. Cutout, or tap the plane to move it');
+  } catch(err){ setHint('Error: '+err.message); }
+  busy=false; $('genBtn').disabled=false;
+};
+
+$('cutBtn').onclick = async ()=>{
+  if (!selected || !selected.userData.imageUrl || busy) return;
+  busy=true; $('cutBtn').disabled=true;
+  setHint('Cutting out subject…', true);
+  try {
+    const q = selected;
+    const data = await fal(CUT_ENDPOINT, { image_url: q.userData.imageUrl });
+    const url = firstImageUrl(data);
+    if (!url) throw new Error('no image in response');
+    await applyTexture(q, url);
+    q.userData.imageUrl = url;
+    q.userData.frame.visible = false;   // frameless cutout floating in space
+    setHint('Cutout placed. Tap to move it');
+  } catch(err){ setHint('Error: '+err.message); }
+  busy=false; $('cutBtn').disabled=false;
+};
+</script>
+</body>
+</html>
