@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Spatial Canvas — AR image collage</title>
 <style>
   :root{
@@ -26,7 +26,7 @@
     font:inherit; color:var(--ink); background:rgba(255,255,255,.05);
     border:1px solid var(--line); border-radius:8px; padding:10px 12px; width:100%;
   }
-  textarea{resize:none; height:72px;}
+  textarea{resize:none; height:64px;}
 
   /* ---------- landing ---------- */
   #landing{
@@ -38,29 +38,41 @@
   #landing p{color:var(--dim); line-height:1.5; font-size:13px;}
   #landing .field label{display:block; color:var(--dim); font-size:12px; margin-bottom:6px;}
   #support{font-size:12px; color:var(--dim);}
+  #gestures{list-style:none; font-size:12px; color:var(--dim); line-height:1.7;}
+  #gestures b{color:var(--ink); font-weight:600;}
 
   /* ---------- AR overlay ---------- */
   #overlay{position:fixed; inset:0; display:none; touch-action:none;}
   #overlay.active{display:block;}
 
   #topbar{
-    position:absolute; top:0; left:0; right:0; padding:12px 14px;
+    position:absolute; top:0; left:0; right:0;
+    padding:calc(12px + env(safe-area-inset-top)) 14px 12px;
     display:flex; justify-content:space-between; align-items:center;
     pointer-events:none;
   }
   #topbar .tag{font-size:12px; letter-spacing:.08em; color:var(--ink);
     text-shadow:0 1px 3px rgba(0,0,0,.6);}
-  #exitBtn{pointer-events:auto; padding:6px 12px; font-size:12px;
+  #topbar .actions{display:flex; gap:8px; pointer-events:auto;}
+  #topbar .actions button{padding:6px 12px; font-size:12px;
     background:var(--panel); backdrop-filter:blur(6px);}
 
   #hint{
-    position:absolute; bottom:18px; left:50%; transform:translateX(-50%);
+    position:absolute; bottom:calc(18px + env(safe-area-inset-bottom));
+    left:50%; transform:translateX(-50%);
     background:var(--panel); backdrop-filter:blur(6px);
     border:1px solid var(--line); border-radius:999px;
     padding:8px 16px; font-size:12px; color:var(--dim);
     white-space:nowrap; max-width:92vw; overflow:hidden; text-overflow:ellipsis;
   }
-  #hint.busy{color:var(--accent);}
+  #hint.busy{color:var(--accent); padding-left:34px;}
+  #hint.busy::before{
+    content:''; position:absolute; left:12px; top:50%; margin-top:-7px;
+    width:14px; height:14px; border-radius:50%;
+    border:2px solid var(--accent); border-top-color:transparent;
+    animation:spin .8s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
 
   /* focus-frame while drawing */
   #rect{position:absolute; display:none; pointer-events:none;}
@@ -73,15 +85,19 @@
 
   /* prompt / edit panel */
   #panel{
-    position:absolute; left:12px; right:12px; bottom:64px;
+    position:absolute; left:12px; right:12px;
+    bottom:calc(64px + env(safe-area-inset-bottom));
     background:var(--panel); backdrop-filter:blur(10px);
     border:1px solid var(--line); border-radius:14px;
-    padding:14px; display:none; flex-direction:column; gap:10px;
+    padding:12px; display:none; flex-direction:column; gap:8px;
   }
   #panel.open{display:flex;}
   #panel .row{display:flex; gap:8px;}
-  #panel .row button{flex:1; font-size:13px; padding:9px 6px;}
+  #panel .row button{flex:1; font-size:13px; padding:9px 4px;}
+  #panel .row button.narrow{flex:0 0 46px;}
+  #panel .head{display:flex; justify-content:space-between; align-items:center;}
   #panel .lbl{font-size:11px; color:var(--dim); letter-spacing:.06em;}
+  #panel #closeBtn{border:none; padding:2px 8px; font-size:16px; color:var(--dim);}
 </style>
 </head>
 <body>
@@ -89,9 +105,16 @@
 <!-- ============ LANDING ============ -->
 <div id="landing">
   <h1>Spatial <span>Canvas</span></h1>
-  <p>Walk around, frame a rectangle with your finger, generate an image with
-     Nano Banana 2, cut out the part you want, and pin it in your room.
-     Tap a plane once to carry it with the phone, tap again to place it.</p>
+  <p>Build an image collage in your room. Frame a rectangle to generate images
+     with Nano Banana 2, or import photos from your device. Isolate elements
+     with Segment&nbsp;Anything, edit them with AI, cut out backgrounds,
+     duplicate — then pin everything in space.</p>
+  <ul id="gestures">
+    <li><b>drag</b> — frame a new image</li>
+    <li><b>tap plane</b> — pick up · <b>tap anywhere</b> — place</li>
+    <li><b>double-tap plane</b> — edit menu</li>
+    <li><b>pinch / twist</b> — scale &amp; rotate</li>
+  </ul>
   <div class="field">
     <label>fal.ai API key (stored only on this device)</label>
     <input id="falKey" type="password" placeholder="key_id:key_secret" autocomplete="off">
@@ -104,7 +127,10 @@
 <div id="overlay">
   <div id="topbar">
     <div class="tag">SPATIAL CANVAS</div>
-    <button id="exitBtn">Exit</button>
+    <div class="actions">
+      <button id="importBtn">+ Photo</button>
+      <button id="exitBtn">Exit</button>
+    </div>
   </div>
 
   <div id="rect">
@@ -114,19 +140,29 @@
   </div>
 
   <div id="panel">
-    <div class="lbl" id="panelTitle">GENERATE IMAGE</div>
+    <div class="head">
+      <div class="lbl" id="panelTitle">GENERATE IMAGE</div>
+      <button id="closeBtn" aria-label="Close">✕</button>
+    </div>
     <textarea id="prompt" placeholder="Describe the image…"></textarea>
     <div class="row">
       <button id="genBtn" class="primary">Generate</button>
-      <button id="cutBtn">Cutout</button>
+      <button id="editBtn">AI Edit</button>
     </div>
     <div class="row">
+      <button id="cutBtn">Cutout</button>
+      <button id="segBtn">Isolate</button>
+      <button id="dupBtn">Duplicate</button>
+    </div>
+    <div class="row">
+      <button id="shrinkBtn" class="narrow" aria-label="Smaller">−</button>
+      <button id="growBtn" class="narrow" aria-label="Larger">+</button>
       <button id="delBtn">Delete</button>
-      <button id="closeBtn">Close</button>
     </div>
   </div>
 
   <div id="hint">Draw a rectangle to begin</div>
+  <input id="fileInput" type="file" accept="image/*" style="display:none">
 </div>
 
 <script type="importmap">
@@ -137,15 +173,21 @@
 import * as THREE from 'three';
 
 /* ================= config ================= */
-const GEN_ENDPOINT = 'fal-ai/nano-banana-2';        // text-to-image
-const CUT_ENDPOINT = 'fal-ai/birefnet/v2';          // background removal → transparent PNG
+const GEN_ENDPOINT  = 'fal-ai/nano-banana-2';        // text-to-image
+const EDIT_ENDPOINT = 'fal-ai/nano-banana-2/edit';   // image+prompt → image
+const CUT_ENDPOINT  = 'fal-ai/birefnet/v2';          // background removal → transparent PNG
+const SAM_ENDPOINT  = 'fal-ai/sam2/image';           // segment anything (point prompt → mask)
 const AR_RATIOS = {'21:9':21/9,'16:9':16/9,'3:2':3/2,'4:3':4/3,'5:4':5/4,
                    '1:1':1,'4:5':4/5,'3:4':3/4,'2:3':2/3,'9:16':9/16};
+const IMPORT_MAX_PX = 1600;      // downscale imported photos before use
+const MIN_SCALE = 0.05, MAX_SCALE = 25;
 
 /* ================= dom ================= */
 const $ = id => document.getElementById(id);
 const landing=$('landing'), overlay=$('overlay'), hint=$('hint'),
-      rectEl=$('rect'), panel=$('panel'), promptEl=$('prompt');
+      rectEl=$('rect'), panel=$('panel'), promptEl=$('prompt'),
+      fileInput=$('fileInput');
+const jobButtons = ['genBtn','editBtn','cutBtn','segBtn','dupBtn'].map($);
 
 let falKey = '';
 try { falKey = localStorage.getItem('falKey') || ''; $('falKey').value = falKey; } catch(e){}
@@ -169,6 +211,7 @@ let held = null;            // quad currently attached to the phone
 let heldOffset = new THREE.Matrix4();
 let selected = null;        // quad the panel is editing
 let busy = false;
+let segMode = false;        // waiting for a tap on an image element
 
 function initThree(){
   renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
@@ -178,10 +221,21 @@ function initThree(){
   document.body.appendChild(renderer.domElement);
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera();
+  addEventListener('resize', ()=>{
+    if (!renderer.xr.isPresenting) renderer.setSize(innerWidth, innerHeight);
+  });
 }
 initThree();
 
 const setHint = (t, isBusy=false)=>{ hint.textContent=t; hint.classList.toggle('busy',isBusy); };
+
+function xrCam(){
+  const cam = renderer.xr.getCamera();
+  return cam.cameras && cam.cameras.length ? cam.cameras[0] : cam;
+}
+function camWorldPos(){
+  return new THREE.Vector3().setFromMatrixPosition(xrCam().matrixWorld);
+}
 
 /* ================= session ================= */
 $('startBtn').onclick = async ()=>{
@@ -202,22 +256,22 @@ $('startBtn').onclick = async ()=>{
   viewerSpace = await session.requestReferenceSpace('viewer');
   session.addEventListener('end', onEnd);
   renderer.setAnimationLoop(onFrame);
-  setHint('Draw a rectangle to begin');
+  setHint('Draw a rectangle, or import a photo');
 };
 $('exitBtn').onclick = ()=> session && session.end();
 function onEnd(){
   renderer.setAnimationLoop(null);
   overlay.classList.remove('active');
   landing.style.display='flex';
-  quads.forEach(q=>scene.remove(q)); quads.length=0;
-  held=null; selected=null; closePanel();
+  quads.forEach(q=>{ scene.remove(q); q.geometry.dispose(); q.userData.frame.geometry.dispose(); });
+  quads.length=0;
+  held=null; selected=null; segMode=false; closePanel();
 }
 
 /* ================= one-shot hit test through a screen point ================= */
 const pendingHits = [];   // {source, frames, resolve}
 async function hitTestAtNDC(nx, ny){
-  const cam = renderer.xr.getCamera();
-  const c = cam.cameras && cam.cameras.length ? cam.cameras[0] : cam;
+  const c = xrCam();
   // ray direction in viewer space through NDC point
   const v = new THREE.Vector3(nx, ny, -1).applyMatrix4(c.projectionMatrixInverse).normalize();
   let source;
@@ -258,7 +312,7 @@ function onFrame(t, frame){
 }
 
 /* ================= quads ================= */
-function makeQuad(widthM, heightM, pos, camPos){
+function makeQuad(widthM, heightM){
   const geo = new THREE.PlaneGeometry(widthM, heightM);
   const mat = new THREE.MeshBasicMaterial({
     color:0xffb43a, transparent:true, opacity:0.22, side:THREE.DoubleSide
@@ -269,38 +323,83 @@ function makeQuad(widthM, heightM, pos, camPos){
     new THREE.LineBasicMaterial({color:0xffb43a})
   );
   mesh.add(frame);
-  mesh.userData = {frame, w:widthM, h:heightM, imageUrl:null, lastTap:0};
-  mesh.position.copy(pos);
-  const yaw = Math.atan2(camPos.x-pos.x, camPos.z-pos.z);
-  mesh.quaternion.setFromEuler(new THREE.Euler(0, yaw, 0));
+  mesh.userData = {frame, w:widthM, h:heightM, imageUrl:null, lastTap:0, scl:1};
   scene.add(mesh);
   quads.push(mesh);
   return mesh;
+}
+function orientToward(mesh, camPos){
+  const yaw = Math.atan2(camPos.x-mesh.position.x, camPos.z-mesh.position.z);
+  mesh.quaternion.setFromEuler(new THREE.Euler(0, yaw, 0));
 }
 function setSelected(q){
   selected = q;
   quads.forEach(o=>o.userData.frame.material.color.set(o===q?0xffb43a:0x555555));
 }
+function removeQuad(q){
+  scene.remove(q);
+  q.geometry.dispose();
+  q.userData.frame.geometry.dispose();
+  const i = quads.indexOf(q);
+  if (i>=0) quads.splice(i,1);
+  if (held===q) held=null;
+  if (selected===q){ selected=null; closePanel(); }
+}
 function raycastQuads(nx, ny){
-  const cam = renderer.xr.getCamera();
-  const c = cam.cameras && cam.cameras.length ? cam.cameras[0] : cam;
   const rc = new THREE.Raycaster();
-  rc.setFromCamera(new THREE.Vector2(nx,ny), c);
+  rc.setFromCamera(new THREE.Vector2(nx,ny), xrCam());
   const hits = rc.intersectObjects(quads, false);
-  return hits.length ? hits[0].object : null;
+  return hits.length ? hits[0] : null;   // intersection: {object, uv, ...}
 }
 
-/* ================= touch: draw / grab / place ================= */
+/* ================= pinch: scale & rotate ================= */
+let pinch = null;   // {target, prevD, prevA}
+const touchDist  = ts => Math.hypot(ts[1].clientX-ts[0].clientX, ts[1].clientY-ts[0].clientY);
+const touchAngle = ts => Math.atan2(ts[1].clientY-ts[0].clientY, ts[1].clientX-ts[0].clientX);
+const _pm = new THREE.Matrix4();
+
+function applyPinch(q, f, da){
+  const s = q.userData.scl;
+  const ns = Math.min(MAX_SCALE, Math.max(MIN_SCALE, s*f));
+  f = ns/s; q.userData.scl = ns;
+  if (q === held){
+    heldOffset.multiply(_pm.makeRotationZ(-da));
+    heldOffset.multiply(_pm.makeScale(f,f,f));
+  } else {
+    q.rotateZ(-da);
+    q.scale.multiplyScalar(f);
+  }
+}
+
+/* ================= touch: draw / grab / place / pinch ================= */
 let t0=null, tCur=null, drawing=false;
 const DRAG_PX = 24;
 
 overlay.addEventListener('touchstart', e=>{
   if (panel.contains(e.target) || e.target.closest('button')) return;
+  if (e.touches.length >= 2){
+    t0=null;
+    if (drawing){ drawing=false; rectEl.style.display='none'; }
+    const target = held || selected
+      || raycastQuads(((e.touches[0].clientX+e.touches[1].clientX)/innerWidth)-1,
+                      1-((e.touches[0].clientY+e.touches[1].clientY)/innerHeight))?.object;
+    if (target) pinch = {target, prevD:touchDist(e.touches), prevA:touchAngle(e.touches)};
+    return;
+  }
   const t = e.touches[0];
   t0 = {x:t.clientX, y:t.clientY}; tCur={...t0}; drawing=false;
 }, {passive:true});
 
 overlay.addEventListener('touchmove', e=>{
+  if (pinch){
+    if (e.touches.length >= 2){
+      const d = touchDist(e.touches), a = touchAngle(e.touches);
+      const f = Math.min(2, Math.max(.5, d/pinch.prevD));
+      applyPinch(pinch.target, f, a-pinch.prevA);
+      pinch.prevD = d; pinch.prevA = a;
+    }
+    return;
+  }
   if (!t0) return;
   const t = e.touches[0];
   tCur = {x:t.clientX, y:t.clientY};
@@ -315,32 +414,49 @@ overlay.addEventListener('touchmove', e=>{
   }
 }, {passive:true});
 
-overlay.addEventListener('touchend', async ()=>{
+overlay.addEventListener('touchend', async e=>{
+  if (pinch){
+    if (e.touches.length < 2){ pinch=null; t0=null; }
+    return;
+  }
   if (!t0) return;
   const start=t0, end=tCur; t0=null;
   rectEl.style.display='none';
 
   const toNDC = p => ({x:(p.x/innerWidth)*2-1, y:-(p.y/innerHeight)*2+1});
 
-  if (!drawing){                       /* ---- tap: grab / place ---- */
+  if (!drawing){                       /* ---- tap ---- */
     const n = toNDC(end);
-    const q = raycastQuads(n.x, n.y);
-    if (!q) return;
+
+    if (segMode){                                 // pick the element to isolate
+      const hit = raycastQuads(n.x, n.y);
+      segMode = false;
+      if (!hit || !hit.object.userData.imageUrl){ setHint('Isolate cancelled'); return; }
+      isolateElement(hit.object, hit.uv);
+      return;
+    }
+
+    if (held){ placeHeld(); return; }             // tap anywhere places
+
+    const hit = raycastQuads(n.x, n.y);
+    if (!hit){                                    // tap empty space → deselect
+      if (selected){ setSelected(null); closePanel(); }
+      return;
+    }
+    const q = hit.object;
     const now = performance.now();
-    if (now - q.userData.lastTap < 350){        // double-tap → edit panel
+    if (now - q.userData.lastTap < 350){          // double-tap → edit panel
       q.userData.lastTap = 0;
-      if (held===q){ placeHeld(); }
       setSelected(q); openPanel(q); return;
     }
     q.userData.lastTap = now;
-    setTimeout(()=>{                            // single tap after delay
+    setTimeout(()=>{                              // single tap after delay → grab
       if (q.userData.lastTap !== now) return;
-      if (held === q){ placeHeld(); }
-      else if (!held){
+      if (!held){
         const cam = renderer.xr.getCamera();
         heldOffset.copy(cam.matrixWorld).invert().multiply(q.matrixWorld);
-        held = q; setSelected(q);
-        setHint('Move your phone — tap the plane again to place it');
+        held = q; setSelected(q); closePanel();
+        setHint('Move your phone — tap anywhere to place. Pinch to scale, twist to rotate');
       }
     }, 360);
     return;
@@ -354,9 +470,8 @@ overlay.addEventListener('touchend', async ()=>{
   const n = toNDC({x:cx,y:cy});
   setHint('Mapping surface…', true);
   let pos = await hitTestAtNDC(n.x, n.y);
-  const cam = renderer.xr.getCamera();
-  const c = cam.cameras && cam.cameras.length ? cam.cameras[0] : cam;
-  const camPos = new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
+  const c = xrCam();
+  const camPos = camWorldPos();
   if (!pos){  // fallback: 1.5 m along the ray
     const dir = new THREE.Vector3(n.x,n.y,-1).applyMatrix4(c.projectionMatrixInverse)
                   .normalize().transformDirection(c.matrixWorld);
@@ -366,7 +481,9 @@ overlay.addEventListener('touchend', async ()=>{
   const fovY = 2*Math.atan(1/c.projectionMatrix.elements[5]);
   const worldH = 2*dist*Math.tan(fovY/2)*(h/innerHeight);
   const worldW = worldH*(w/h);
-  const quad = makeQuad(worldW, worldH, pos, camPos);
+  const quad = makeQuad(worldW, worldH);
+  quad.position.copy(pos);
+  orientToward(quad, camPos);
   setSelected(quad);
   openPanel(quad);
   setHint('Describe what should appear in the frame');
@@ -375,25 +492,43 @@ overlay.addEventListener('touchend', async ()=>{
 function placeHeld(){
   if (!held) return;
   held.updateMatrixWorld(true);
+  held.userData.lastTap = performance.now();   // quick second tap → edit panel
   held = null;
   setHint('Placed. Tap to pick up again, double-tap to edit');
 }
 
 /* ================= panel ================= */
 function openPanel(q){
-  $('panelTitle').textContent = q.userData.imageUrl ? 'EDIT PLANE' : 'GENERATE IMAGE';
-  $('cutBtn').disabled = !q.userData.imageUrl;
+  const hasImg = !!q.userData.imageUrl;
+  $('panelTitle').textContent = hasImg ? 'EDIT PLANE' : 'GENERATE IMAGE';
+  $('genBtn').textContent = hasImg ? 'Regenerate' : 'Generate';
+  $('editBtn').disabled = !hasImg || busy;
+  $('cutBtn').disabled  = !hasImg || busy;
+  $('segBtn').disabled  = !hasImg || busy;
   panel.classList.add('open');
 }
 function closePanel(){ panel.classList.remove('open'); }
 $('closeBtn').onclick = closePanel;
 $('delBtn').onclick = ()=>{
   if (!selected) return;
-  scene.remove(selected);
-  quads.splice(quads.indexOf(selected),1);
-  if (held===selected) held=null;
-  selected=null; closePanel(); setHint('Deleted');
+  removeQuad(selected);
+  setHint('Deleted');
 };
+$('shrinkBtn').onclick = ()=>{ if (selected) applyPinch(selected, 0.8, 0); };
+$('growBtn').onclick   = ()=>{ if (selected) applyPinch(selected, 1.25, 0); };
+
+/* ================= busy jobs ================= */
+async function runJob(label, fn){
+  if (busy) return;
+  busy = true;
+  jobButtons.forEach(b=>b.disabled=true);
+  setHint(label, true);
+  try { await fn(); }
+  catch(err){ setHint('Error: '+(err.message||err)); }
+  busy = false;
+  jobButtons.forEach(b=>b.disabled=false);
+  if (selected && panel.classList.contains('open')) openPanel(selected);
+}
 
 /* ================= fal.ai ================= */
 async function fal(endpoint, body){
@@ -416,28 +551,120 @@ function nearestRatio(r){
   return best;
 }
 
+/* ================= images & textures ================= */
+function loadImage(url){
+  return new Promise((resolve,reject)=>{
+    const im = new Image();
+    if (!url.startsWith('data:')) im.crossOrigin = 'anonymous';
+    im.onload = ()=>resolve(im);
+    im.onerror = ()=>reject(new Error('image load failed'));
+    im.src = url;
+  });
+}
+
 async function applyTexture(q, url){
-  const blob = await (await fetch(url)).blob();
-  const objUrl = URL.createObjectURL(blob);
-  const tex = await new THREE.TextureLoader().loadAsync(objUrl);
+  let src = url;
+  if (!url.startsWith('data:')){
+    const blob = await (await fetch(url)).blob();
+    src = URL.createObjectURL(blob);
+  }
+  const tex = await new THREE.TextureLoader().loadAsync(src);
   tex.colorSpace = THREE.SRGBColorSpace;
+  // match plane geometry to the image's aspect, keep width
+  const imgR = tex.image.width / tex.image.height;
+  const w = q.userData.w, h = w/imgR;
+  if (Math.abs(h - q.userData.h) > 1e-4){
+    q.geometry.dispose();
+    q.geometry = new THREE.PlaneGeometry(w, h);
+    q.userData.h = h;
+    q.userData.frame.geometry.dispose();
+    q.userData.frame.geometry = new THREE.EdgesGeometry(q.geometry);
+  }
+  if (q.material.map) q.material.map.dispose();
   q.material.map = tex;
   q.material.color.set(0xffffff);
   q.material.opacity = 1;
   q.material.needsUpdate = true;
-  // match plane to the image's aspect, keep width
-  const imgR = tex.image.width / tex.image.height;
-  q.scale.y = (q.userData.w / imgR) / q.userData.h;
 }
 
-$('genBtn').onclick = async ()=>{
-  if (!selected || busy) return;
+async function fileToDataUrl(file){
+  const objUrl = URL.createObjectURL(file);
+  try {
+    const img = await loadImage(objUrl);
+    const s = Math.min(1, IMPORT_MAX_PX/Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth*s));
+    const h = Math.max(1, Math.round(img.naturalHeight*s));
+    const c = document.createElement('canvas'); c.width=w; c.height=h;
+    c.getContext('2d').drawImage(img, 0, 0, w, h);
+    return file.type==='image/png' ? c.toDataURL('image/png')
+                                   : c.toDataURL('image/jpeg', 0.92);
+  } finally { URL.revokeObjectURL(objUrl); }
+}
+
+/* mask (white=keep) applied to image, cropped to the element's bounding box */
+async function cutElement(img, maskUrl){
+  const mask = await loadImage(maskUrl);
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const c = document.createElement('canvas'); c.width=W; c.height=H;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(mask, 0, 0, W, H);
+  const md = ctx.getImageData(0, 0, W, H).data;
+  ctx.clearRect(0, 0, W, H);
+  ctx.drawImage(img, 0, 0, W, H);
+  const id = ctx.getImageData(0, 0, W, H);
+  const d = id.data;
+  let minX=W, minY=H, maxX=-1, maxY=-1;
+  for (let y=0; y<H; y++){
+    for (let x=0; x<W; x++){
+      const i = (y*W+x)*4;
+      const a = ((md[i]*.299 + md[i+1]*.587 + md[i+2]*.114) * md[i+3]/255) | 0;
+      d[i+3] = Math.min(d[i+3], a);
+      if (a > 16){
+        if (x<minX) minX=x; if (x>maxX) maxX=x;
+        if (y<minY) minY=y; if (y>maxY) maxY=y;
+      }
+    }
+  }
+  if (maxX < 0) throw new Error('nothing selected — tap directly on an element');
+  ctx.putImageData(id, 0, 0);
+  const pad=2;
+  const x0=Math.max(0,minX-pad), y0=Math.max(0,minY-pad);
+  const bw=Math.min(W,maxX+pad+1)-x0, bh=Math.min(H,maxY+pad+1)-y0;
+  const c2 = document.createElement('canvas'); c2.width=bw; c2.height=bh;
+  c2.getContext('2d').drawImage(c, x0, y0, bw, bh, 0, 0, bw, bh);
+  return { dataUrl:c2.toDataURL('image/png'), x:x0, y:y0, w:bw, h:bh, W, H };
+}
+
+/* ================= actions ================= */
+$('importBtn').onclick = ()=> fileInput.click();
+fileInput.onchange = ()=>{
+  const file = fileInput.files && fileInput.files[0];
+  fileInput.value = '';
+  if (!file) return;
+  runJob('Importing photo…', async ()=>{
+    const dataUrl = await fileToDataUrl(file);
+    let pos = await hitTestAtNDC(0, -0.1);
+    const camPos = camWorldPos();
+    if (!pos){
+      const dir = new THREE.Vector3(0,0,-1).transformDirection(xrCam().matrixWorld);
+      pos = camPos.clone().addScaledVector(dir, 1.2);
+    }
+    const q = makeQuad(0.7, 0.7);
+    q.position.copy(pos);
+    orientToward(q, camPos);
+    await applyTexture(q, dataUrl);
+    q.userData.imageUrl = dataUrl;
+    setSelected(q);
+    setHint('Imported — tap to move, double-tap to edit, pinch to scale');
+  });
+};
+
+$('genBtn').onclick = ()=>{
+  if (!selected) return;
   const p = promptEl.value.trim();
   if (!p){ setHint('Write a prompt first'); return; }
-  busy=true; $('genBtn').disabled=true;
-  setHint('Generating with Nano Banana 2…', true);
-  try {
-    const q = selected;
+  const q = selected;
+  runJob('Generating with Nano Banana 2…', async ()=>{
     const data = await fal(GEN_ENDPOINT, {
       prompt:p, num_images:1, output_format:'png',
       aspect_ratio: nearestRatio(q.userData.w / q.userData.h)
@@ -446,18 +673,32 @@ $('genBtn').onclick = async ()=>{
     if (!url) throw new Error('no image in response');
     await applyTexture(q, url);
     q.userData.imageUrl = url;
-    $('cutBtn').disabled = false;
-    setHint('Done. Cutout, or tap the plane to move it');
-  } catch(err){ setHint('Error: '+err.message); }
-  busy=false; $('genBtn').disabled=false;
+    setHint('Done. AI Edit, Cutout, Isolate — or tap the plane to move it');
+  });
 };
 
-$('cutBtn').onclick = async ()=>{
-  if (!selected || !selected.userData.imageUrl || busy) return;
-  busy=true; $('cutBtn').disabled=true;
-  setHint('Cutting out subject…', true);
-  try {
-    const q = selected;
+$('editBtn').onclick = ()=>{
+  if (!selected || !selected.userData.imageUrl) return;
+  const p = promptEl.value.trim();
+  if (!p){ setHint('Describe the edit first — e.g. "make it night time"'); return; }
+  const q = selected;
+  runJob('Editing with AI…', async ()=>{
+    const data = await fal(EDIT_ENDPOINT, {
+      prompt:p, image_urls:[q.userData.imageUrl],
+      num_images:1, output_format:'png'
+    });
+    const url = firstImageUrl(data);
+    if (!url) throw new Error('no image in response');
+    await applyTexture(q, url);
+    q.userData.imageUrl = url;
+    setHint('Edited. Tap the plane to move it');
+  });
+};
+
+$('cutBtn').onclick = ()=>{
+  if (!selected || !selected.userData.imageUrl) return;
+  const q = selected;
+  runJob('Cutting out subject…', async ()=>{
     const data = await fal(CUT_ENDPOINT, { image_url: q.userData.imageUrl });
     const url = firstImageUrl(data);
     if (!url) throw new Error('no image in response');
@@ -465,8 +706,67 @@ $('cutBtn').onclick = async ()=>{
     q.userData.imageUrl = url;
     q.userData.frame.visible = false;   // frameless cutout floating in space
     setHint('Cutout placed. Tap to move it');
-  } catch(err){ setHint('Error: '+err.message); }
-  busy=false; $('cutBtn').disabled=false;
+  });
+};
+
+$('segBtn').onclick = ()=>{
+  if (!selected || !selected.userData.imageUrl) return;
+  segMode = true;
+  closePanel();
+  setHint('Tap the element you want to isolate — tap empty space to cancel');
+};
+
+function isolateElement(q, uv){
+  runJob('Isolating element with Segment Anything…', async ()=>{
+    const img = await loadImage(q.userData.imageUrl);
+    const px = Math.round(uv.x * img.naturalWidth);
+    const py = Math.round((1-uv.y) * img.naturalHeight);
+    const data = await fal(SAM_ENDPOINT, {
+      image_url: q.userData.imageUrl,
+      prompts: [{x:px, y:py, label:1}]
+    });
+    const maskUrl = firstImageUrl(data);
+    if (!maskUrl) throw new Error('no mask in response');
+    const cut = await cutElement(img, maskUrl);
+    // new plane sized & positioned so the element pops out right over the source
+    const worldW = q.userData.w * q.scale.x * (cut.w/cut.W);
+    const nq = makeQuad(worldW, worldW*(cut.h/cut.w));
+    const ccx = cut.x + cut.w/2, ccy = cut.y + cut.h/2;
+    const lx = (ccx/cut.W - 0.5) * q.userData.w;
+    const ly = (0.5 - ccy/cut.H) * q.userData.h;
+    q.updateMatrixWorld(true);
+    nq.position.copy(q.localToWorld(new THREE.Vector3(lx, ly, 0.02)));
+    nq.quaternion.copy(q.getWorldQuaternion(new THREE.Quaternion()));
+    await applyTexture(nq, cut.dataUrl);
+    nq.userData.imageUrl = cut.dataUrl;
+    nq.userData.frame.visible = false;
+    setSelected(nq);
+    setHint('Element isolated — tap it to move, double-tap to edit');
+  });
+}
+
+$('dupBtn').onclick = ()=>{
+  if (!selected) return;
+  const src = selected;
+  const q = new THREE.Mesh(src.geometry.clone(), src.material.clone());
+  const frame = new THREE.LineSegments(
+    new THREE.EdgesGeometry(q.geometry),
+    new THREE.LineBasicMaterial({color:0xffb43a})
+  );
+  frame.visible = src.userData.frame.visible;
+  q.add(frame);
+  q.userData = { frame, w:src.userData.w, h:src.userData.h,
+                 imageUrl:src.userData.imageUrl, lastTap:0, scl:src.userData.scl };
+  src.updateMatrixWorld(true);
+  q.position.copy(src.position);
+  q.quaternion.copy(src.quaternion);
+  q.scale.copy(src.scale);
+  q.translateX(src.userData.w * 0.15 + 0.02);
+  q.translateZ(0.01);
+  scene.add(q);
+  quads.push(q);
+  setSelected(q);
+  setHint('Duplicated — tap it to move');
 };
 </script>
 </body>
