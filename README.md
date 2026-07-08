@@ -11,8 +11,8 @@ key, stored only in the browser's localStorage.
 
 - **Generate** — drag a rectangle in AR to frame a plane, describe an image,
   and Nano Banana 2 fills it (aspect ratio matched to your frame).
-- **Import** — bring in photos from your device; they're downscaled on-device
-  and placed on the surface in front of you.
+- **Import** — bring in one or more photos from your device; they're
+  downscaled on-device and placed in a row on the surface in front of you.
 - **AI Edit** — rewrite any plane's image with a text instruction
   (image-to-image via `nano-banana-2/edit`).
 - **Cutout** — remove an image's background (BiRefNet) for a frameless
@@ -33,6 +33,7 @@ key, stored only in the browser's localStorage.
 | tap anywhere while carrying | place it |
 | double-tap a plane | open the edit panel |
 | two-finger pinch / twist | scale / rotate the held or selected plane |
+| two-finger swipe up / down | push away / pull closer while carrying |
 | tap empty space | deselect / close panel |
 
 ## fal.ai endpoints used

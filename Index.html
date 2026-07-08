@@ -114,6 +114,7 @@
     <li><b>tap plane</b> — pick up · <b>tap anywhere</b> — place</li>
     <li><b>double-tap plane</b> — edit menu</li>
     <li><b>pinch / twist</b> — scale &amp; rotate</li>
+    <li><b>2-finger swipe</b> — push / pull while carrying</li>
   </ul>
   <div class="field">
     <label>fal.ai API key (stored only on this device)</label>
@@ -162,7 +163,7 @@
   </div>
 
   <div id="hint">Draw a rectangle to begin</div>
-  <input id="fileInput" type="file" accept="image/*" style="display:none">
+  <input id="fileInput" type="file" accept="image/*" multiple style="display:none">
 </div>
 
 <script type="importmap">
@@ -258,14 +259,24 @@ $('startBtn').onclick = async ()=>{
   renderer.setAnimationLoop(onFrame);
   setHint('Draw a rectangle, or import a photo');
 };
-$('exitBtn').onclick = ()=> session && session.end();
+let exitArmed = 0;
+$('exitBtn').onclick = ()=>{
+  if (!session) return;
+  const now = performance.now();
+  if (quads.length===0 || now-exitArmed < 2500) session.end();
+  else { exitArmed = now; setHint('Tap Exit again — your collage will be cleared'); }
+};
 function onEnd(){
   renderer.setAnimationLoop(null);
+  session = null;
+  // resolve pending hit tests so awaiting jobs don't hang busy forever
+  pendingHits.forEach(h=>{ try{ h.source.cancel(); }catch(e){} h.resolve(null); });
+  pendingHits.length = 0;
   overlay.classList.remove('active');
   landing.style.display='flex';
   quads.forEach(q=>{ scene.remove(q); q.geometry.dispose(); q.userData.frame.geometry.dispose(); });
   quads.length=0;
-  held=null; selected=null; segMode=false; closePanel();
+  held=null; selected=null; segMode=false; pinch=null; closePanel();
 }
 
 /* ================= one-shot hit test through a screen point ================= */
@@ -323,7 +334,7 @@ function makeQuad(widthM, heightM){
     new THREE.LineBasicMaterial({color:0xffb43a})
   );
   mesh.add(frame);
-  mesh.userData = {frame, w:widthM, h:heightM, imageUrl:null, lastTap:0, scl:1};
+  mesh.userData = {frame, w:widthM, h:heightM, imageUrl:null, lastTap:0, scl:1, frameless:false};
   scene.add(mesh);
   quads.push(mesh);
   return mesh;
@@ -334,7 +345,12 @@ function orientToward(mesh, camPos){
 }
 function setSelected(q){
   selected = q;
-  quads.forEach(o=>o.userData.frame.material.color.set(o===q?0xffb43a:0x555555));
+  quads.forEach(o=>{
+    const f = o.userData.frame;
+    f.material.color.set(o===q ? 0xffb43a : 0x555555);
+    // cutouts are frameless, but show the frame while selected so there is feedback
+    f.visible = o.userData.frameless ? o===q : true;
+  });
 }
 function removeQuad(q){
   scene.remove(q);
@@ -373,17 +389,21 @@ function applyPinch(q, f, da){
 
 /* ================= touch: draw / grab / place / pinch ================= */
 let t0=null, tCur=null, drawing=false;
+let tapGen = 0;              // bumped on every completed gesture — cancels stale grab timers
 const DRAG_PX = 24;
+const onUiElement = el => !!el && el !== overlay &&
+  (panel.contains(el) || (el.closest && el.closest('button')));
 
 overlay.addEventListener('touchstart', e=>{
-  if (panel.contains(e.target) || e.target.closest('button')) return;
+  if (onUiElement(e.target)) return;
   if (e.touches.length >= 2){
-    t0=null;
+    t0=null; tapGen++;
     if (drawing){ drawing=false; rectEl.style.display='none'; }
     const target = held || selected
       || raycastQuads(((e.touches[0].clientX+e.touches[1].clientX)/innerWidth)-1,
                       1-((e.touches[0].clientY+e.touches[1].clientY)/innerHeight))?.object;
-    if (target) pinch = {target, prevD:touchDist(e.touches), prevA:touchAngle(e.touches)};
+    if (target) pinch = {target, prevD:touchDist(e.touches), prevA:touchAngle(e.touches),
+                         prevY:(e.touches[0].clientY+e.touches[1].clientY)/2};
     return;
   }
   const t = e.touches[0];
@@ -396,7 +416,18 @@ overlay.addEventListener('touchmove', e=>{
       const d = touchDist(e.touches), a = touchAngle(e.touches);
       const f = Math.min(2, Math.max(.5, d/pinch.prevD));
       applyPinch(pinch.target, f, a-pinch.prevA);
-      pinch.prevD = d; pinch.prevA = a;
+      // two-finger swipe up/down pushes / pulls a carried plane
+      const my = (e.touches[0].clientY+e.touches[1].clientY)/2;
+      if (pinch.target === held){
+        const dz = (my - pinch.prevY)/innerHeight;   // up = push away, down = pull closer
+        const p = new THREE.Vector3().setFromMatrixPosition(heldOffset);
+        const dist = p.length();
+        if (dist > 1e-6){
+          const nd = Math.min(6, Math.max(0.25, dist*(1 - dz*1.4)));
+          heldOffset.setPosition(p.multiplyScalar(nd/dist));
+        }
+      }
+      pinch.prevD = d; pinch.prevA = a; pinch.prevY = my;
     }
     return;
   }
@@ -414,13 +445,21 @@ overlay.addEventListener('touchmove', e=>{
   }
 }, {passive:true});
 
+overlay.addEventListener('touchcancel', ()=>{
+  t0=null; pinch=null;
+  if (drawing){ drawing=false; rectEl.style.display='none'; }
+}, {passive:true});
+
 overlay.addEventListener('touchend', async e=>{
+  // a finger that started on a button/panel ends on it too — don't consume the gesture
+  if (onUiElement(e.target)) return;
   if (pinch){
     if (e.touches.length < 2){ pinch=null; t0=null; }
     return;
   }
   if (!t0) return;
   const start=t0, end=tCur; t0=null;
+  const myGen = ++tapGen;
   rectEl.style.display='none';
 
   const toNDC = p => ({x:(p.x/innerWidth)*2-1, y:-(p.y/innerHeight)*2+1});
@@ -451,13 +490,14 @@ overlay.addEventListener('touchend', async e=>{
     }
     q.userData.lastTap = now;
     setTimeout(()=>{                              // single tap after delay → grab
-      if (q.userData.lastTap !== now) return;
-      if (!held){
-        const cam = renderer.xr.getCamera();
-        heldOffset.copy(cam.matrixWorld).invert().multiply(q.matrixWorld);
-        held = q; setSelected(q); closePanel();
-        setHint('Move your phone — tap anywhere to place. Pinch to scale, twist to rotate');
-      }
+      if (q.userData.lastTap !== now) return;     // second tap cancelled it
+      if (tapGen !== myGen) return;               // a later gesture happened
+      if (held || pinch || t0 || segMode || !session) return;
+      if (!quads.includes(q)) return;             // deleted meanwhile
+      const cam = renderer.xr.getCamera();
+      heldOffset.copy(cam.matrixWorld).invert().multiply(q.matrixWorld);
+      held = q; setSelected(q); closePanel();
+      setHint('Tap to place · pinch scale · twist rotate · 2-finger swipe push/pull');
     }, 360);
     return;
   }
@@ -470,6 +510,7 @@ overlay.addEventListener('touchend', async e=>{
   const n = toNDC({x:cx,y:cy});
   setHint('Mapping surface…', true);
   let pos = await hitTestAtNDC(n.x, n.y);
+  if (!session) return;
   const c = xrCam();
   const camPos = camWorldPos();
   if (!pos){  // fallback: 1.5 m along the ray
@@ -519,15 +560,17 @@ $('growBtn').onclick   = ()=>{ if (selected) applyPinch(selected, 1.25, 0); };
 
 /* ================= busy jobs ================= */
 async function runJob(label, fn){
-  if (busy) return;
+  if (busy){ setHint('Wait for the current job to finish…'); return; }
   busy = true;
   jobButtons.forEach(b=>b.disabled=true);
   setHint(label, true);
   try { await fn(); }
   catch(err){ setHint('Error: '+(err.message||err)); }
-  busy = false;
-  jobButtons.forEach(b=>b.disabled=false);
-  if (selected && panel.classList.contains('open')) openPanel(selected);
+  finally {
+    busy = false;
+    jobButtons.forEach(b=>b.disabled=false);
+    if (selected && panel.classList.contains('open')) openPanel(selected);
+  }
 }
 
 /* ================= fal.ai ================= */
@@ -636,25 +679,33 @@ async function cutElement(img, maskUrl){
 }
 
 /* ================= actions ================= */
-$('importBtn').onclick = ()=> fileInput.click();
+$('importBtn').onclick = ()=>{
+  if (busy){ setHint('Wait for the current job to finish…'); return; }
+  fileInput.click();
+};
 fileInput.onchange = ()=>{
-  const file = fileInput.files && fileInput.files[0];
+  const files = Array.from(fileInput.files || []);
   fileInput.value = '';
-  if (!file) return;
-  runJob('Importing photo…', async ()=>{
-    const dataUrl = await fileToDataUrl(file);
+  if (!files.length) return;
+  runJob(files.length>1 ? `Importing ${files.length} photos…` : 'Importing photo…', async ()=>{
     let pos = await hitTestAtNDC(0, -0.1);
+    if (!session) throw new Error('AR session ended');
     const camPos = camWorldPos();
     if (!pos){
       const dir = new THREE.Vector3(0,0,-1).transformDirection(xrCam().matrixWorld);
       pos = camPos.clone().addScaledVector(dir, 1.2);
     }
-    const q = makeQuad(0.7, 0.7);
-    q.position.copy(pos);
-    orientToward(q, camPos);
-    await applyTexture(q, dataUrl);
-    q.userData.imageUrl = dataUrl;
-    setSelected(q);
+    const right = new THREE.Vector3(1,0,0).transformDirection(xrCam().matrixWorld);
+    right.y = 0; right.normalize();
+    for (let i=0; i<files.length; i++){
+      const dataUrl = await fileToDataUrl(files[i]);
+      const q = makeQuad(0.7, 0.7);
+      q.position.copy(pos).addScaledVector(right, i*0.75);
+      orientToward(q, camPos);
+      await applyTexture(q, dataUrl);
+      q.userData.imageUrl = dataUrl;
+      setSelected(q);
+    }
     setHint('Imported — tap to move, double-tap to edit, pinch to scale');
   });
 };
@@ -704,7 +755,8 @@ $('cutBtn').onclick = ()=>{
     if (!url) throw new Error('no image in response');
     await applyTexture(q, url);
     q.userData.imageUrl = url;
-    q.userData.frame.visible = false;   // frameless cutout floating in space
+    q.userData.frameless = true;        // frameless cutout floating in space
+    setSelected(q);
     setHint('Cutout placed. Tap to move it');
   });
 };
@@ -739,7 +791,7 @@ function isolateElement(q, uv){
     nq.quaternion.copy(q.getWorldQuaternion(new THREE.Quaternion()));
     await applyTexture(nq, cut.dataUrl);
     nq.userData.imageUrl = cut.dataUrl;
-    nq.userData.frame.visible = false;
+    nq.userData.frameless = true;
     setSelected(nq);
     setHint('Element isolated — tap it to move, double-tap to edit');
   });
@@ -753,10 +805,10 @@ $('dupBtn').onclick = ()=>{
     new THREE.EdgesGeometry(q.geometry),
     new THREE.LineBasicMaterial({color:0xffb43a})
   );
-  frame.visible = src.userData.frame.visible;
   q.add(frame);
   q.userData = { frame, w:src.userData.w, h:src.userData.h,
-                 imageUrl:src.userData.imageUrl, lastTap:0, scl:src.userData.scl };
+                 imageUrl:src.userData.imageUrl, lastTap:0,
+                 scl:src.userData.scl, frameless:src.userData.frameless };
   src.updateMatrixWorld(true);
   q.position.copy(src.position);
   q.quaternion.copy(src.quaternion);
