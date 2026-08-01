@@ -1,0 +1,1519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>F/A-18C Hornet — Cinematic Study</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#0b0e11;overflow:hidden;
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#e8e4da;-webkit-user-select:none;user-select:none}
+  #c{position:fixed;inset:0;touch-action:none;display:block}
+  .panel{position:fixed;background:rgba(22,26,30,.88);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+    border:1px solid rgba(217,178,94,.18);border-radius:8px;padding:12px 14px;transition:opacity .25s}
+  .ui-hidden .panel,.ui-hidden #title{opacity:0;pointer-events:none}
+  label{display:block;font-size:10px;letter-spacing:.14em;color:#9aa0a6;margin:10px 0 4px;text-transform:uppercase}
+  input[type=range]{width:170px;-webkit-appearance:none;appearance:none;height:3px;background:#3a4046;border-radius:2px;outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:13px;height:13px;border-radius:50%;
+    background:#d9b25e;border:1px solid #7a6233;cursor:pointer}
+  input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:#d9b25e;border:1px solid #7a6233;cursor:pointer}
+  button{background:#2a3036;color:#e8e4da;border:1px solid rgba(217,178,94,.35);border-radius:6px;
+    font-size:10px;letter-spacing:.12em;padding:8px 12px;cursor:pointer;text-transform:uppercase}
+  button:active{background:#3a4249}
+  button.gold{background:#d9b25e;color:#1a1c1e;border-color:#a8874a;font-weight:600}
+  #title{position:fixed;top:16px;left:18px;font-family:Georgia,"Times New Roman",serif;pointer-events:none;transition:opacity .25s}
+  #title h1{margin:0;font-size:21px;font-weight:400;letter-spacing:.02em}
+  #title span{font-size:10px;letter-spacing:.22em;color:#d9b25e;text-transform:uppercase;font-family:Helvetica,Arial,sans-serif}
+  #ctrl{top:16px;right:16px;width:200px}
+  #ctrl .row{display:flex;gap:8px;margin-top:10px}
+  #ctrl .row button{flex:1}
+  #ctrl .row.mini{gap:5px;margin-top:6px}
+  #ctrl .row.mini button{padding:6px 2px;font-size:9px;letter-spacing:.06em}
+  #status{font-size:10px;color:#9aa0a6;margin-top:8px;min-height:13px;letter-spacing:.04em}
+  #hint{font-size:9.5px;color:#6f767c;margin-top:10px;line-height:1.5;letter-spacing:.03em}
+  #tl{left:50%;transform:translateX(-50%);bottom:14px;width:min(680px,92vw);display:flex;align-items:center;gap:10px}
+  #tl button{padding:7px 10px}
+  #trackWrap{position:relative;flex:1;height:24px;display:flex;align-items:center}
+  #scrub{width:100%}
+  .key{position:absolute;top:50%;width:9px;height:9px;background:#d9b25e;border:1px solid #7a6233;
+    transform:translate(-50%,-50%) rotate(45deg);pointer-events:none}
+  #ttime{font-size:10px;letter-spacing:.1em;color:#d9b25e;width:52px;text-align:center}
+  /* AR overlay — children hidden ONLY via opacity, never display */
+  #overlayRoot{position:fixed;inset:0;pointer-events:none;z-index:50}
+  #arHud{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .2s}
+  #overlayRoot.ar-active #arHud{opacity:1}
+  #overlayRoot.hud-off #arHud{opacity:0}
+  #overlayRoot.hud-off #arHud button{pointer-events:none!important}
+  #arHint{position:absolute;top:18px;left:50%;transform:translateX(-50%);font-size:11px;letter-spacing:.06em;
+    color:#fff;background:rgba(22,26,30,.7);padding:8px 14px;border-radius:8px;text-align:center;max-width:86vw}
+  #arBtns{position:absolute;bottom:26px;left:50%;transform:translateX(-50%);display:flex;gap:10px}
+  #arBtns button{pointer-events:auto;background:rgba(22,26,30,.85);min-width:52px;font-size:11px;padding:11px 14px}
+  #arBtns button.gold{background:#d9b25e}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="title"><h1>F/A-18C Hornet</h1><span>Cinematic AR Study</span></div>
+
+<div id="ctrl" class="panel">
+  <label>Environment</label>
+  <div class="row"><button id="envBtn" class="gold">Deck · switch to Flight</button></div>
+  <label>Time of day — <span id="todVal">10.5h</span></label>
+  <input id="tod" type="range" min="0" max="24" step="0.1" value="10.5">
+  <div class="row mini">
+    <button data-h="6.3">Dawn</button><button data-h="12">Noon</button>
+    <button data-h="18.6">Dusk</button><button data-h="23">Night</button>
+  </div>
+  <label>Overcast</label>
+  <input id="ovc" type="range" min="0" max="1" step="0.01" value="0.15">
+  <label>Cloud cover</label>
+  <input id="cld" type="range" min="0" max="1" step="0.01" value="0.4">
+  <label>Airspeed <span style="color:#6f767c">(flight)</span></label>
+  <input id="spd" type="range" min="0" max="1" step="0.01" value="0.5">
+  <label>Bank — <span id="bankVal">0°</span> <span style="color:#6f767c">(flight)</span></label>
+  <input id="bank" type="range" min="-60" max="60" step="1" value="0">
+  <label>Model</label>
+  <div class="row"><button id="glbLoad">Load GLB</button><button id="glbRot">↻ 90°</button><button id="glbClear">✕</button></div>
+  <input id="glbFile" type="file" accept=".glb,.gltf" style="display:none">
+  <div id="alignBox" style="display:none">
+    <label>Align fore/aft — <span id="axV">0.0 m</span></label>
+    <input id="alignX" type="range" min="-6" max="6" step="0.05" value="0">
+    <label>Align height — <span id="ayV">0.0 m</span></label>
+    <input id="alignY" type="range" min="-3" max="3" step="0.05" value="0">
+    <label>Align size — <span id="asV">100%</span></label>
+    <input id="alignS" type="range" min="0.5" max="1.6" step="0.01" value="1">
+  </div>
+  <div class="row"><button id="arBtn" class="gold" style="display:none">View in AR</button></div>
+  <label>Export video</label>
+  <div class="row"><button id="orient">16:9 · 1920×1080</button></div>
+  <div class="row"><button id="render" class="gold">Render</button></div>
+  <div id="status"></div>
+  <div id="hint">Drag orbit · wheel / pinch zoom · two-finger or right-drag pan · H hides UI</div>
+</div>
+
+<div id="tl" class="panel">
+  <button id="play">▶</button>
+  <div id="trackWrap"><input id="scrub" type="range" min="0" max="8" step="0.01" value="0"></div>
+  <div id="ttime">0.00s</div>
+  <button id="addKey">Add key</button>
+  <button id="clearKeys">Clear</button>
+  <button id="resetKeys">Reset</button>
+</div>
+
+<div id="overlayRoot">
+  <div id="arHud">
+    <div id="arHint">Tap a surface to place · 1 finger rotates · 2 fingers move + pinch · 3-finger tap hides UI</div>
+    <div id="arBtns">
+      <button id="arMinus">−</button>
+      <button id="arPlus">+</button>
+      <button id="arGrab">Grab</button>
+      <button id="arBackdrop">Backdrop</button>
+      <button id="arExit" class="gold">Exit</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script id="main">
+'use strict';
+/* ============================================================
+   F/A-18C HORNET — single-file cinematic AR viewer (v2)
+   Axes: +X = nose, +Y = up, +Z = starboard. Ground = y0.
+   Fuselage centreline y = 1.9 m. Surveyed dimensions:
+   length 17.1 · span 12.3 (tip AIM-9s) · fin tops 4.65 ·
+   gear track 3.1 · wheelbase 5.8.
+   ============================================================ */
+
+// ---------- renderer / scene ----------
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.xr.enabled = true;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(46, innerWidth/innerHeight, 0.05, 400);
+let lastSkyCol = new THREE.Color(0x8fc1e8);          // module-level: AR backdrop uses this
+
+const world = new THREE.Group();
+scene.add(world);
+
+// ---------- procedural textures ----------
+function tex(size, draw, transparent){
+  const cv = document.createElement('canvas'); cv.width = cv.height = size;
+  const g = cv.getContext('2d');
+  if(!transparent){ /* opaque fill done by draw */ }
+  draw(g, size);
+  const t = new THREE.CanvasTexture(cv);
+  t.encoding = THREE.sRGBEncoding;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 4;
+  return t;
+}
+function drawPaint(g, s){
+  g.fillStyle = '#98a0a7'; g.fillRect(0,0,s,s);
+  for(let i=0;i<900;i++){ g.fillStyle = `rgba(${120+Math.random()*40|0},${128+Math.random()*40|0},${136+Math.random()*40|0},0.08)`;
+    g.fillRect(Math.random()*s, Math.random()*s, 2+Math.random()*5, 2+Math.random()*5); }
+  g.strokeStyle = 'rgba(58,64,70,0.4)'; g.lineWidth = 2;
+  const jitter = () => (Math.random()-0.5)*10;
+  for(let x=0;x<=s;x+=128){ g.beginPath(); g.moveTo(x+jitter(),0); g.lineTo(x+jitter(),s); g.stroke(); }
+  for(let y=0;y<=s;y+=96){ g.beginPath(); g.moveTo(0,y+jitter()); g.lineTo(s,y+jitter()); g.stroke(); }
+  g.fillStyle = 'rgba(60,66,72,0.35)';
+  for(let x=0;x<=s;x+=128) for(let y=8;y<s;y+=26) g.fillRect(x-1.5, y, 3, 3);
+}
+function makePaint(rx, ry){ const t = tex(512, drawPaint); t.repeat.set(rx, ry); return t; }
+function makeDeck(){
+  return tex(1024, (g,s)=>{
+    g.fillStyle = '#43474b'; g.fillRect(0,0,s,s);
+    for(let i=0;i<5000;i++){ const v = 55+Math.random()*30|0;
+      g.fillStyle = `rgba(${v},${v+3},${v+6},0.25)`;
+      g.fillRect(Math.random()*s, Math.random()*s, 1+Math.random()*3, 1+Math.random()*3); }
+    g.strokeStyle = 'rgba(25,27,29,0.85)'; g.lineWidth = 4;
+    for(let x=64;x<s;x+=128) for(let y=64;y<s;y+=128){
+      g.beginPath(); g.moveTo(x-12,y); g.lineTo(x+12,y); g.moveTo(x,y-12); g.lineTo(x,y+12); g.stroke(); }
+    g.fillStyle = '#c9a227'; g.fillRect(s*0.47, 0, s*0.06, s);
+    g.strokeStyle = '#e8e4da'; g.lineWidth = 5; g.setLineDash([26,22]);
+    g.beginPath(); g.moveTo(s*0.455,0); g.lineTo(s*0.455,s); g.stroke();
+    g.beginPath(); g.moveTo(s*0.545,0); g.lineTo(s*0.545,s); g.stroke();
+    g.setLineDash([]);
+    g.strokeStyle = 'rgba(20,20,22,0.25)'; g.lineWidth = 9;
+    for(let i=0;i<7;i++){ g.beginPath();
+      g.arc(Math.random()*s, Math.random()*s, 120+Math.random()*260, Math.random()*3, Math.random()*3+1.2); g.stroke(); }
+  });
+}
+function makeNozzle(){
+  return tex(256, (g,s)=>{
+    g.fillStyle = '#2b2d30'; g.fillRect(0,0,s,s);
+    for(let x=0;x<s;x+=16){ g.fillStyle = (x/16)%2 ? '#3a3d41' : '#232527'; g.fillRect(x,0,9,s); }
+    g.fillStyle = 'rgba(130,90,50,0.18)'; g.fillRect(0,0,s,40);
+  });
+}
+// transparent decal canvases
+function textDecal(txt, px, color){
+  const t = tex(256, (g,s)=>{
+    g.clearRect(0,0,s,s);
+    g.fillStyle = color || '#3a4046';
+    g.font = '900 ' + px + 'px "Arial Black",Arial,sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(txt, s/2, s/2);
+  });
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  return t;
+}
+function roundelDecal(){
+  const t = tex(256, (g,s)=>{
+    g.clearRect(0,0,s,s);
+    const cx=s/2, cy=s/2, r=58;
+    // bars
+    g.fillStyle='#e8eaec'; g.fillRect(cx-118, cy-26, 236, 52);
+    g.strokeStyle='#20335c'; g.lineWidth=8; g.strokeRect(cx-118, cy-26, 236, 52);
+    g.fillStyle='#b03a30'; g.fillRect(cx-110, cy-8, 220, 16);
+    // disc + star
+    g.fillStyle='#20335c'; g.beginPath(); g.arc(cx,cy,r,0,7); g.fill();
+    g.fillStyle='#e8eaec'; g.beginPath();
+    for(let i=0;i<5;i++){
+      const a=-Math.PI/2+i*2*Math.PI/5, b=a+Math.PI/5;
+      g.lineTo(cx+Math.cos(a)*r*0.82, cy+Math.sin(a)*r*0.82);
+      g.lineTo(cx+Math.cos(b)*r*0.34, cy+Math.sin(b)*r*0.34);
+    }
+    g.closePath(); g.fill();
+  });
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  return t;
+}
+function decal(map, w, h, x, y, z, port, parent){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+    new THREE.MeshStandardMaterial({map, transparent:true, depthWrite:false,
+      polygonOffset:true, polygonOffsetFactor:-2, roughness:0.6, metalness:0.1}));
+  m.position.set(x,y,z);
+  if(port) m.rotation.y = Math.PI;          // faces −Z; reads correctly from port side
+  (parent||jet).add(m);
+  return m;
+}
+
+// ---------- materials ----------
+const paintFlat  = makePaint(0.3, 0.3);   // extrudes: UVs = raw metres → scale via repeat
+const paintLathe = makePaint(6, 3);       // lathe 0–1 UVs → own instance
+const paintCyl   = makePaint(2, 2);       // cylinders 0–1 UVs → own instance
+// dark ghost gray over light ghost gray: uppers tinted darker, fuselage/nacelles lighter
+const matTop    = new THREE.MeshStandardMaterial({map:paintFlat,  color:0xb9c0c8, roughness:0.58, metalness:0.12});
+const matFus    = new THREE.MeshStandardMaterial({map:paintLathe, color:0xffffff, roughness:0.55, metalness:0.12});
+const matNac    = new THREE.MeshStandardMaterial({map:paintCyl,   color:0xf2f4f6, roughness:0.55, metalness:0.12});
+const matRadome = new THREE.MeshStandardMaterial({color:0x6f757b, roughness:0.7, metalness:0.05});
+const matNozzle = new THREE.MeshStandardMaterial({map:makeNozzle(), color:0x8a8d90, roughness:0.45, metalness:0.85});
+const matDark   = new THREE.MeshStandardMaterial({color:0x17181a, roughness:0.9});
+const matTire   = new THREE.MeshStandardMaterial({color:0x1b1c1e, roughness:0.95});
+const matHub    = new THREE.MeshStandardMaterial({color:0xb9bfc4, roughness:0.35, metalness:0.7});
+const matGear   = new THREE.MeshStandardMaterial({color:0xeceff1, roughness:0.45, metalness:0.25}); // USN white
+const matYellow = new THREE.MeshStandardMaterial({color:0xd9a520, roughness:0.7});
+const matRed    = new THREE.MeshStandardMaterial({color:0x9c2a1f, roughness:0.6});
+const matMissile= new THREE.MeshStandardMaterial({color:0xdfe3e6, roughness:0.5});
+const matCanopy = new THREE.MeshPhongMaterial({color:0x86b2c6, transparent:true, opacity:0.34,
+  shininess:120, specular:0xffffff, side:THREE.DoubleSide});
+const matDeck   = new THREE.MeshStandardMaterial({map:makeDeck(), roughness:0.95, metalness:0});
+matDeck.map.repeat.set(2,2);
+
+// ---------- helpers ----------
+function box(w,h,d, mat, x,y,z, parent){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+  m.position.set(x,y,z); m.castShadow = true; m.receiveShadow = true;
+  (parent||jet).add(m); return m;
+}
+function cyl(rTop, rBot, len, mat, x,y,z, alongX, parent, seg){
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBot, len, seg||28), mat);
+  if(alongX) m.rotation.z = -Math.PI/2;      // +Y → +X
+  m.position.set(x,y,z); m.castShadow = true; m.receiveShadow = true;
+  (parent||jet).add(m); return m;
+}
+function flatExtrude(shape, thickness, mat, side){ // plan-view shape (x=world x, y=world z)
+  const g = new THREE.ExtrudeGeometry(shape, {depth:thickness, bevelEnabled:false});
+  g.translate(0,0,-thickness/2);
+  const m = new THREE.Mesh(g, mat);
+  m.rotation.x = side * Math.PI/2;           // +1 → starboard, −1 → mirror to port
+  m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+function strut(x1,y1,z1, x2,y2,z2, r, mat, parent){ // cylinder between two points
+  const a = new THREE.Vector3(x1,y1,z1), b = new THREE.Vector3(x2,y2,z2);
+  const len = a.distanceTo(b);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 12), mat);
+  m.position.copy(a).add(b).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), b.clone().sub(a).normalize());
+  m.castShadow = true;
+  (parent||jet).add(m); return m;
+}
+function roundedRect(w, h, r){
+  const s = new THREE.Shape();
+  s.moveTo(-w/2+r, -h/2);
+  s.lineTo(w/2-r, -h/2);  s.quadraticCurveTo(w/2, -h/2, w/2, -h/2+r);
+  s.lineTo(w/2, h/2-r);   s.quadraticCurveTo(w/2, h/2, w/2-r, h/2);
+  s.lineTo(-w/2+r, h/2);  s.quadraticCurveTo(-w/2, h/2, -w/2, h/2-r);
+  s.lineTo(-w/2, -h/2+r); s.quadraticCurveTo(-w/2, -h/2, -w/2+r, -h/2);
+  return s;
+}
+
+// ---------- the jet ----------
+const jet = new THREE.Group();
+world.add(jet);
+const CL = 1.9;            // fuselage centreline height
+const navBulbs = [];       // nav lights + slime-light materials driven at night
+let canopyMesh = null;
+const floodLights = [];
+
+// Fuselage lathe: nose x=+8.55 → blends to nacelle/boom section at x=−6.8
+{
+  const prof = [[0.01,-6.8],[0.55,-6.8],[0.66,-5.0],[0.72,-2.5],[0.74,0.5],[0.70,2.5],
+                [0.62,4.2],[0.52,5.6],[0.40,6.7],[0.22,7.8],[0.0,8.55]]
+    .map(p => new THREE.Vector2(p[0], p[1]));
+  const m = new THREE.Mesh(new THREE.LatheGeometry(prof, 40), matFus);
+  m.rotation.z = -Math.PI/2;
+  m.scale.set(0.9, 1, 1);                    // local X = world vertical → squash
+  m.position.y = CL;
+  m.castShadow = m.receiveShadow = true;
+  jet.add(m);
+  const rad = cyl(0.02, 0.235, 1.15, matRadome, 7.95, CL, 0, true);
+  rad.scale.z = 0.9;
+  // dorsal spine deck (darker topside)
+  box(6.6, 0.16, 0.5, matTop, 0.9, 2.5, 0);
+  // gun fairing on upper nose + muzzle
+  const gun = box(0.85, 0.09, 0.2, matTop, 6.95, 2.2, 0);
+  gun.rotation.z = -0.14;
+  cyl(0.035, 0.035, 0.05, matDark, 7.38, 2.26, 0, true, jet, 10).castShadow = false;
+  // anti-glare panel ahead of windscreen
+  const ag = box(1.55, 0.02, 0.34, matDark, 7.3, 2.16, 0); ag.rotation.z = -0.18; ag.castShadow = false;
+  // AOA probes
+  for(const s of [1,-1]) cyl(0.008, 0.03, 0.22, matDark, 7.35, 1.95, s*0.27, true, jet, 8);
+  // nose formation slime lights
+  for(const s of [1,-1]){
+    const sl = box(0.06, 0.5, 0.02, new THREE.MeshStandardMaterial(
+      {color:0x2f3a1e, emissive:0xb8d24a, emissiveIntensity:0}), 6.1, 2.02, s*0.50);
+    sl.castShadow = false; navBulbs.push(sl);
+  }
+}
+
+// Wings — LE sweep 26.7°, TE slightly FORWARD swept (root chord 4.4, tip 1.53, taper 0.35)
+const wingShape = new THREE.Shape();
+wingShape.moveTo(0,0); wingShape.lineTo(-4.4,0); wingShape.lineTo(-4.25,5.4);
+wingShape.lineTo(-2.72,5.4); wingShape.closePath();
+for(const s of [1,-1]){
+  const w = flatExtrude(wingShape, 0.13, matTop, s);
+  w.position.set(1.7, 2.0, s*0.75);
+  jet.add(w);
+  // inboard stores pylon
+  box(1.1, 0.34, 0.09, matMissile, -0.4, 1.78, s*2.2);
+}
+
+// LEX — long ogee strakes from windscreen shoulder to wing root, + fences + walkway lines
+const lexShape = new THREE.Shape();
+lexShape.moveTo(6.4, 0.32);
+lexShape.quadraticCurveTo(5.2, 0.50, 4.2, 0.72);
+lexShape.quadraticCurveTo(2.9, 0.98, 1.7, 1.02);
+lexShape.lineTo(1.7, 0.30);
+lexShape.closePath();
+for(const s of [1,-1]){
+  const l = flatExtrude(lexShape, 0.09, matTop, s);
+  l.position.set(0, 2.04, 0);
+  jet.add(l);
+  // LEX fence (outer edge at x=3.4 is z≈0.83 — keep the fence on the strake)
+  box(0.55, 0.18, 0.02, matTop, 3.4, 2.17, s*0.80);
+  // walkway line flush on the strake top (2.085)
+  const wk = box(2.6, 0.005, 0.03, matDark, 3.6, 2.088, s*0.55); wk.castShadow = false;
+}
+
+// Twin fins — 20° cant, curved LE with forward root fillet, tops ≈4.64 m
+const finShape = new THREE.Shape();
+finShape.moveTo(0.9, 0);
+finShape.lineTo(-2.7, 0);                 // root
+finShape.lineTo(-2.6, 2.65);              // TE up (slight rake)
+finShape.lineTo(-1.8, 2.65);              // squared tip
+finShape.lineTo(-0.35, 0.55);             // swept LE down
+finShape.quadraticCurveTo(0.4, 0.12, 0.9, 0);  // fillet blend
+finShape.closePath();
+const tailTex = textDecal('NE', 150, '#4a525c');
+for(const s of [1,-1]){
+  const g = new THREE.ExtrudeGeometry(finShape, {depth:0.09, bevelEnabled:false});
+  g.translate(0,0,-0.045);
+  const f = new THREE.Mesh(g, matTop);
+  f.castShadow = f.receiveShadow = true;
+  f.position.set(-2.9, 2.15, s*0.65);
+  f.rotation.x = s * THREE.MathUtils.degToRad(20);
+  jet.add(f);
+  // fin cap (dark) + tip nav light + slime strip + tail code on OUTER face
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.07, 0.11), matDark);
+  cap.position.set(-2.2, 2.66, 0); f.add(cap);
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.045,10,10),
+    new THREE.MeshStandardMaterial({color:0xdddddd, emissive:0xffffff, emissiveIntensity:0}));
+  tip.position.set(-2.62, 2.6, 0); f.add(tip); navBulbs.push(tip);
+  const sl = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.06, 0.02),
+    new THREE.MeshStandardMaterial({color:0x2f3a1e, emissive:0xb8d24a, emissiveIntensity:0}));
+  sl.position.set(-1.1, 1.1, s*0.055); f.add(sl); navBulbs.push(sl);
+  decal(tailTex, 1.15, 1.15, -1.55, 1.35, s*0.06, s<0, f);
+}
+
+// Stabilators — LE sweep ≈35°, TE at nozzle exit, 2° anhedral
+const stabShape = new THREE.Shape();
+stabShape.moveTo(0,0); stabShape.lineTo(-2.3,0); stabShape.lineTo(-3.05,2.9);
+stabShape.lineTo(-2.05,2.9); stabShape.closePath();
+for(const s of [1,-1]){
+  const grp = new THREE.Group();
+  grp.add(flatExtrude(stabShape, 0.1, matTop, s));
+  grp.position.set(-5.7, 1.8, s*0.6);
+  grp.rotation.x = s * THREE.MathUtils.degToRad(2);
+  jet.add(grp);
+}
+
+// Intake trunks — rounded-rect cross-section, raked dark inlets, splitter plates off the fuselage
+{
+  const cs = roundedRect(0.66, 0.78, 0.18);          // (shape x → world −Z, y → world Y)
+  for(const s of [1,-1]){
+    const g = new THREE.ExtrudeGeometry(cs, {depth:7.3, bevelEnabled:false});
+    const m = new THREE.Mesh(g, matNac);
+    m.rotation.y = Math.PI/2;                        // extrude +Z → world +X
+    m.position.set(-4.6, 1.48, s*0.88);              // runs x −4.6 → +2.7
+    m.castShadow = m.receiveShadow = true;
+    jet.add(m);
+    // raked inlet: dark plate slightly recessed + upper lip overhang
+    const inlet = box(0.05, 0.62, 0.5, matDark, 2.62, 1.46, s*0.88); inlet.rotation.z = 0.12; inlet.castShadow = false;
+    box(0.5, 0.05, 0.58, matNac, 2.55, 1.9, s*0.88);
+    // splitter plate between fuselage and lip (with daylight gap)
+    const sp = box(1.5, 0.72, 0.03, matNac, 2.6, 1.5, s*0.72);
+    sp.rotation.y = s*0.06;
+  }
+}
+
+// Nacelles, nozzles, centre tail boom + stowed hook
+for(const s of [1,-1]){
+  cyl(0.44, 0.46, 3.8, matNac, -6.3, 1.75, s*0.5, true);
+  cyl(0.30, 0.44, 0.7, matNozzle, -8.3, 1.75, s*0.5, true);
+  const burner = cyl(0.28, 0.28, 0.06, matDark, -8.66, 1.75, s*0.5, true);
+  burner.castShadow = false;
+}
+{
+  // boom between/below the engines carries the hook stinger + tail light
+  box(2.4, 0.34, 0.42, matFus, -7.2, 1.32, 0);
+  strut(-7.0, 1.24, 0, -8.9, 0.98, 0, 0.05, matGear);
+  box(0.22, 0.1, 0.16, matDark, -8.95, 0.95, 0);     // hook shoe
+  const b = new THREE.Mesh(new THREE.SphereGeometry(0.05,10,10),
+    new THREE.MeshStandardMaterial({color:0xdddddd, emissive:0xffffff, emissiveIntensity:0}));
+  b.position.set(-8.45, 1.4, 0); jet.add(b); navBulbs.push(b);
+}
+
+// Cockpit — sill, tub, ejection seat, HUD, windscreen + frame bow + main canopy
+{
+  box(2.7, 0.3, 0.9, matFus, 5.35, 2.26, 0);         // raised sill
+  box(1.9, 0.2, 0.68, matDark, 5.3, 2.4, 0).castShadow = false;   // tub
+  const seat = box(0.3, 0.55, 0.44, matDark, 4.8, 2.6, 0); seat.rotation.z = 0.12;
+  box(0.12, 0.2, 0.3, matRed, 4.72, 2.92, 0).castShadow = false;  // headrest pad
+  box(0.05, 0.16, 0.2, matDark, 6.1, 2.52, 0).castShadow = false; // HUD
+  // windscreen
+  const ws = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), matCanopy);
+  ws.scale.set(0.5, 0.42, 0.38); ws.position.set(6.35, 2.38, 0); jet.add(ws);
+  // frame bow between windscreen and canopy
+  const bow = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.035, 8, 14, Math.PI), matFus);
+  bow.position.set(5.95, 2.4, 0); bow.rotation.y = Math.PI/2; jet.add(bow);
+  // main canopy bubble
+  const cp = new THREE.Mesh(new THREE.SphereGeometry(1, 26, 18), matCanopy);
+  cp.scale.set(0.95, 0.52, 0.42); cp.position.set(5.2, 2.44, 0);
+  jet.add(cp); canopyMesh = cp;
+}
+
+// Landing gear — USN white; track 3.1 m, wheelbase ≈5.8 m; open doors.
+// All in gearG so FLIGHT mode can retract (hide) it wholesale.
+const gearG = new THREE.Group(); jet.add(gearG);
+function wheel(r, w, x, y, z){
+  const t = new THREE.Mesh(new THREE.CylinderGeometry(r, r, w, 22), matTire);
+  t.rotation.x = Math.PI/2; t.position.set(x,y,z); t.castShadow = true; gearG.add(t);
+  const h = new THREE.Mesh(new THREE.CylinderGeometry(r*0.45, r*0.45, w+0.02, 16), matHub);
+  h.rotation.x = Math.PI/2; h.position.set(x,y,z); gearG.add(h);
+}
+{ // nose gear: twin wheels + launch bar + side doors
+  strut(4.3, 1.4, 0, 4.3, 0.32, 0, 0.06, matGear, gearG);
+  strut(4.3, 1.0, 0, 4.72, 1.35, 0, 0.035, matGear, gearG);      // drag brace
+  wheel(0.30, 0.15, 4.3, 0.30,  0.17);
+  wheel(0.30, 0.15, 4.3, 0.30, -0.17);
+  strut(4.3, 0.42, 0, 4.95, 0.18, 0, 0.03, matGear, gearG);      // launch bar (drooped)
+  for(const s of [1,-1]){
+    const d = box(0.95, 0.6, 0.02, matGear, 4.3, 1.05, s*0.30, gearG);
+    d.castShadow = false;
+  }
+}
+for(const s of [1,-1]){ // main gear: canted strut + trailing arm to a 3.1 m track
+  strut(-0.95, 1.15, s*0.95, -1.3, 0.55, s*1.5, 0.075, matGear, gearG);
+  strut(-1.3, 0.55, s*1.5, -1.62, 0.42, s*1.55, 0.055, matGear, gearG);
+  strut(-1.75, 1.1, s*0.95, -1.35, 0.6, s*1.45, 0.035, matGear, gearG);
+  wheel(0.42, 0.24, -1.62, 0.42, s*1.55);
+  const d = box(1.15, 0.72, 0.02, matGear, -1.1, 0.85, s*0.82, gearG); d.castShadow = false;
+}
+
+// Wingtip rails + AIM-9s + wingtip nav lights (tip chord x −1.02 … −2.55)
+for(const s of [1,-1]){
+  box(1.7, 0.09, 0.09, matGear, -1.8, 1.93, s*6.12);
+  const msl = new THREE.Group();
+  cyl(0.065, 0.065, 2.6, matMissile, 0, 0, 0, true, msl);
+  cyl(0.005, 0.065, 0.35, matMissile, 1.47, 0, 0, true, msl);
+  for(let i=0;i<4;i++){
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.26, 0.015), matMissile);
+    fin.position.set(1.05, 0, 0); fin.rotation.x = i*Math.PI/2;
+    fin.translateY(0.15); msl.add(fin);
+    const tf = fin.clone(); tf.position.x = -1.15; tf.scale.set(1.2,1.3,1); msl.add(tf);
+  }
+  msl.position.set(-1.75, 1.82, s*6.18);
+  jet.add(msl);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.05,10,10),
+    new THREE.MeshStandardMaterial({color: s>0?0x1f7a2e:0x8a1f1f,
+      emissive: s>0?0x2bff5e:0xff3b2b, emissiveIntensity:0}));
+  bulb.position.set(-1.5, 2.06, s*6.15); jet.add(bulb); navBulbs.push(bulb);
+}
+
+// Markings — star-and-bars, NAVY, modex 301
+{
+  const star = roundelDecal(), navy = textDecal('NAVY', 92, '#3a4046'), modex = textDecal('301', 118, '#3a4046');
+  for(const s of [1,-1]){
+    decal(star, 0.8, 0.8, 3.8, 1.78, s*0.67, s<0);      // skin z at (3.8, 1.78) ≈ 0.64 — 3 cm off
+    decal(navy, 1.3, 1.3, -5.0, 2.05, s*0.66, s<0);     // lathe flank z at (−5.0, 2.05) ≈ 0.63
+    decal(modex, 0.72, 0.72, 6.85, 1.98, s*0.375, s<0); // nose skin z at (6.85, 1.98) ≈ 0.365
+  }
+}
+
+// ---------- deck + props (deckGroup hides wholesale in FLIGHT) ----------
+const deckGroup = new THREE.Group(); world.add(deckGroup);
+{
+  const deck = new THREE.Mesh(new THREE.PlaneGeometry(34, 34), matDeck);
+  deck.rotation.x = -Math.PI/2; deck.receiveShadow = true;
+  deckGroup.add(deck);
+  for(const s of [1,-1]) for(const f of [1,-1])
+    { const ch = box(0.22, 0.2, 0.6, matYellow, -1.62 + f*0.62, 0.1, s*1.55, deckGroup); ch.rotation.z = f*0.2; }
+  const cart = new THREE.Group();
+  cyl(0.16, 0.16, 0.7, matRed, 0, 0.55, 0, false, cart, 18);
+  box(0.5, 0.06, 0.4, matDark, 0, 0.18, 0, cart);
+  for(const s of [1,-1]){
+    const t = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,0.07,14), matTire);
+    t.rotation.x = Math.PI/2; t.position.set(0, 0.12, s*0.22); cart.add(t);
+  }
+  cart.position.set(4.5, 0, 5.2); cart.rotation.y = 0.7; deckGroup.add(cart);
+  for(const [px,pz] of [[-14,11],[13,-12]]){
+    const pole = new THREE.Group();
+    cyl(0.07, 0.09, 6, matDark, 0, 3, 0, false, pole, 10);
+    box(0.5, 0.25, 0.3, matDark, 0.15, 6.05, 0, pole);
+    const pl = new THREE.PointLight(0xffd9a0, 0, 34, 2);
+    pl.position.set(0.2, 5.9, 0); pole.add(pl); floodLights.push(pl);
+    pole.position.set(px, 0, pz); pole.lookAt(0,0,0); pole.rotateY(Math.PI);
+    deckGroup.add(pole);
+  }
+}
+
+// ---------- procedural volumetric clouds (raymarched) ----------
+// Pixar-style cumulus: each cloud is a world-space ellipsoid volume rendered by
+// raymarching 5-octave FBM density inside a BackSide box proxy. Per-sample
+// lighting = 3-tap march toward the sun (self-shadowing) + powder term (dark
+// crevices, bright rims) + vertical ambient gradient (warm tops, cool bases).
+// Marching in world space means correct parallax while orbiting and true
+// fly-through; BackSide keeps clouds visible with the camera inside them.
+let flightMode = false;
+const cloudGroup = new THREE.Group(); world.add(cloudGroup);
+const CG = {                                            // shared uniform objects
+  uSunDir:{value:new THREE.Vector3(0,1,0)}, uSunCol:{value:new THREE.Color(1,1,1)},
+  uAmbT:{value:new THREE.Color(0.8,0.85,0.95)}, uAmbB:{value:new THREE.Color(0.3,0.35,0.45)},
+  uFogC:{value:new THREE.Color(0.6,0.7,0.8)}, uFogN:{value:40}, uFogF:{value:170},
+  uCover:{value:0.6}, uTime:{value:0}, uWScale:{value:1},
+  uStretch:{value:1}, uTravel:{value:0},                // environment motion blur / scroll
+  uQuality:{value:1}                                    // 1 = desktop, 0 = AR fast path
+};
+const cloudVert = `
+varying vec3 vWorld; varying vec3 vCenter;
+void main(){
+  vWorld  = (modelMatrix*vec4(position,1.)).xyz;
+  vCenter = (modelMatrix*vec4(0.,0.,0.,1.)).xyz;
+  gl_Position = projectionMatrix*viewMatrix*vec4(vWorld,1.);
+}`;
+const cloudFrag = `
+precision highp float;
+varying vec3 vWorld; varying vec3 vCenter;
+uniform vec3 uRadii, uSeed, uSunDir, uSunCol, uAmbT, uAmbB, uFogC;
+uniform float uFogN, uFogF, uCover, uTime, uWScale, uStretch, uQuality;
+float hash(vec3 p){ p = fract(p*0.3183099 + vec3(0.1,0.2,0.3)); p *= 17.0;
+  return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
+float vnoise(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
+  return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),
+                 mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),
+             mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),
+                 mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z); }
+float fbm(vec3 p){ float a = .5, s = 0.;
+  int oct = uQuality > 0.5 ? 5 : 3;          // AR fast path: 3 octaves
+  for(int i=0;i<5;i++){ if(i >= oct) break;
+    s += a*vnoise(p); p = p*2.17 + vec3(13.7,7.3,5.1); a *= .5; }
+  return s; }
+float density(vec3 wp){
+  vec3 lp = (wp - vCenter)/uWScale;          // cloud-local metres (AR-scale stable)
+  lp.x /= uStretch;                          // motion blur: smear features along flight axis
+  vec3 q  = lp/uRadii;
+  float r = length(q);
+  if(r > 1.12) return 0.;
+  float n1 = fbm(lp*0.05 + uSeed + vec3(uTime*0.02, 0., uTime*0.008));   // big lobes ~20 m
+  float n2 = fbm(lp*0.16 + uSeed*1.7 + vec3(uTime*0.03));                // cauliflower ~6 m
+  float d  = (1.0 - r)*1.25 + (n1 - 0.5)*1.5 + (n2 - 0.5)*0.5;
+  d *= smoothstep(-1.05, -0.55, q.y);        // flat cumulus base
+  d -= (1.0 - uCover)*0.38;                  // coverage erodes the volume
+  return clamp(d, 0., 1.);
+}
+void main(){
+  vec3 ro = cameraPosition, rd = normalize(vWorld - ro);
+  vec3 wr = uRadii*uWScale; wr.x *= uStretch;
+  vec3 oc = (ro - vCenter)/wr, rdn = rd/wr;
+  float A = dot(rdn,rdn), B = 2.*dot(oc,rdn), C = dot(oc,oc) - 1.2544;  // 1.12^2 margin
+  float disc = B*B - 4.*A*C; if(disc < 0.) discard;
+  float sq = sqrt(disc);
+  float t0 = max((-B - sq)/(2.*A), 0.), t1 = (-B + sq)/(2.*A);
+  if(t1 <= t0) discard;
+  float fogF = smoothstep(uFogN, uFogF, (t0+t1)*0.5);
+  if(fogF > 0.98) discard;
+  const int N = 24;
+  int steps = uQuality > 0.5 ? 24 : 12;      // AR fast path: half the samples
+  float stw = (t1 - t0)/float(steps);
+  float sl  = stw/uWScale;                   // local metres per step
+  float jt  = hash(vec3(gl_FragCoord.xy, fract(uTime)*7.0));  // de-band jitter
+  float T = 1.0; vec3 acc = vec3(0.);
+  for(int i=0;i<N;i++){
+    if(i >= steps) break;
+    float t = t0 + (float(i)+jt)*stw;
+    vec3 wp = ro + rd*t;
+    float d = density(wp);
+    if(d < 0.012) continue;
+    float sh;
+    if(uQuality > 0.5){
+      sh = density(wp + uSunDir*4.0*uWScale)*3.5
+         + density(wp + uSunDir*9.0*uWScale)*2.5
+         + density(wp + uSunDir*17.0*uWScale)*1.5;
+    } else {                                 // 2 shadow taps, reweighted to the same total
+      sh = density(wp + uSunDir*4.0*uWScale)*4.5
+         + density(wp + uSunDir*9.0*uWScale)*3.0;
+    }
+    float lt = exp(-sh*0.55);                // sun transmittance → self-shadow
+    float pw = 1.0 - exp(-d*3.5);            // powder: crevices go dark
+    vec3 q = ((wp - vCenter)/uWScale)/uRadii;
+    vec3 amb = mix(uAmbB, uAmbT, clamp(q.y*0.6 + 0.55, 0., 1.));
+    vec3 col = amb + uSunCol*lt*(0.35 + 0.85*pw);
+    float a = 1.0 - exp(-d*0.16*sl);
+    acc += T*a*col; T *= 1.0 - a;
+    if(T < 0.02) break;
+  }
+  float alpha = (1.0 - T)*(1.0 - fogF);
+  if(alpha < 0.004) discard;
+  vec3 fin = mix(acc/max(1.0 - T, 1e-3), uFogC, fogF);
+  gl_FragColor = vec4(pow(fin, vec3(0.4545)), alpha);   // match renderer sRGB output
+}`;
+const cloudBoxGeo = new THREE.BoxGeometry(1,1,1);
+const CLOUD_N = 16, CLOUD_SPAN = 230;
+function seedCloud(m, anywhereX){
+  const R = Math.random, u = m.material.uniforms;
+  let rx, ry, rz;
+  if(flightMode){
+    rx = 16 + R()*30; ry = rx*(0.45 + R()*0.35); rz = rx*(0.65 + R()*0.45);
+    if(R() < 0.25) ry *= 1.9;                              // occasional towering cell
+    let y, z, tries = 0;
+    do { y = -45 + R()*85; z = (R()*2-1)*110; }            // keep a fly-past corridor
+    while(Math.abs(z) < rz*0.75 + 7 && Math.abs(y - 2) < ry*0.75 + 7 && ++tries < 40);
+    m.position.set(anywhereX ? (R()*2-1)*CLOUD_SPAN : CLOUD_SPAN*(1.0 + R()*0.35) + rx*1.4, y, z);
+  } else {
+    rx = 28 + R()*45; ry = rx*(0.35 + R()*0.25); rz = rx*(0.7 + R()*0.4);
+    const ang = R()*Math.PI*2, dist = 120 + R()*140;       // distant ring of cumulus
+    m.position.set(Math.cos(ang)*dist, 1.12*ry + 12 + R()*45, Math.sin(ang)*dist);
+  }
+  u.uRadii.value.set(rx, ry, rz);
+  u.uSeed.value.set(R()*60, R()*60, R()*60);
+  m.userData.rx = rx; m.userData.limit = CLOUD_SPAN + rx*1.4;   // spawn/despawn margins
+  m.scale.set(rx, ry, rz).multiplyScalar(2.3);             // proxy box covers 1.12·ellipsoid
+}
+for(let i=0;i<CLOUD_N;i++){
+  const uni = Object.assign({}, CG, {                      // CG entries stay SHARED refs
+    uRadii:{value:new THREE.Vector3(20,12,16)},
+    uSeed:{value:new THREE.Vector3()}
+  });
+  const mat = new THREE.ShaderMaterial({vertexShader:cloudVert, fragmentShader:cloudFrag,
+    uniforms:uni, transparent:true, depthWrite:false, side:THREE.BackSide});
+  const m = new THREE.Mesh(cloudBoxGeo, mat);
+  m.userData = {rank: i/CLOUD_N};
+  m.frustumCulled = true;
+  seedCloud(m, true);
+  cloudGroup.add(m);
+}
+function applyCloudDensity(){
+  // In AR every cloud is raymarched per eye — halve the population there.
+  const d = parseFloat(cldEl.value) * (renderer.xr.isPresenting ? 0.55 : 1);
+  for(const m of cloudGroup.children) m.visible = m.userData.rank < d;
+  CG.uCover.value = 0.3 + 0.7*d;
+}
+
+// ---------- curved-Earth ocean + atmospheric sky dome (flight only) ----------
+// The jet cruises at ALT above a scaled planet sphere: the horizon dips ~14°
+// with visible curvature, water gets FBM swell + wind rows, a sun-glint path,
+// fresnel toward the horizon, and exponential aerial perspective. A BackSide
+// gradient dome (zenith→horizon + sun disc/halo) supplies the atmosphere.
+const OCU = { uHorizon:{value:new THREE.Color(0.75,0.85,0.95)},
+              uZenith:{value:new THREE.Color(0.2,0.4,0.7)},
+              uWater:{value:new THREE.Color(0.04,0.18,0.29)} };
+const EARTH_R = 45000, ALT = 1400;
+const oceanFrag = `
+precision highp float;
+varying vec3 vWorld; varying vec3 vCenter;
+uniform vec3 uSunDir, uSunCol, uHorizon, uWater;
+uniform float uTime, uWScale, uStretch, uTravel;
+float hash(vec3 p){ p = fract(p*0.3183099 + vec3(0.1,0.2,0.3)); p *= 17.0;
+  return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
+float vnoise(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
+  return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),
+                 mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),
+             mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),
+                 mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z); }
+float fbm3(vec3 p){ float a = .5, s = 0.;
+  for(int i=0;i<3;i++){ s += a*vnoise(p); p = p*2.3 + vec3(7.1,3.3,11.7); a *= .5; } return s; }
+void main(){
+  vec3 V = vWorld - cameraPosition; float wd = length(V); vec3 vd = V/wd;
+  float dist = wd/uWScale;
+  vec3 n0 = normalize(vWorld - vCenter);               // true sphere normal
+  vec3 lp = vWorld/uWScale;
+  vec2 sp = vec2((lp.x + uTravel)/max(uStretch,1.), lp.z);   // scrolls + motion-smears
+  float n1 = fbm3(vec3(sp*0.0035, uTime*0.02));        // ~300 m swell fields
+  float n2 = fbm3(vec3(sp*0.016 + 7.3, uTime*0.05));   // ~60 m wind rows
+  vec3 n = normalize(n0 + vec3((n1-0.5)*0.22 + (n2-0.5)*0.10, 0., (n2-0.5)*0.18));
+  vec3 col = uWater*(0.8 + 0.5*n1 + 0.2*n2);
+  float fres = pow(1.0 - clamp(dot(-vd, n0), 0., 1.), 3.0);
+  col = mix(col, uHorizon, clamp(fres*0.9, 0., 1.));   // grazing angles whiten
+  float atm = 1.0 - exp(-dist/7000.0);                 // aerial perspective
+  col = mix(col, uHorizon, atm);
+  float g = pow(max(dot(reflect(vd, n), uSunDir), 0.), 160.0);
+  col += uSunCol*g*(0.35 + 0.9*n2)*(1.0 - atm*0.85);   // sparkling glint path
+  gl_FragColor = vec4(pow(col, vec3(0.4545)), 1.0);
+}`;
+const domeFrag = `
+precision highp float;
+varying vec3 vWorld;
+uniform vec3 uSunDir, uSunCol, uHorizon, uZenith;
+void main(){
+  vec3 d = normalize(vWorld - cameraPosition);
+  vec3 col = mix(uHorizon, uZenith, pow(clamp(d.y,0.,1.), 0.42));
+  col = mix(col, uHorizon*0.92, smoothstep(0.0, -0.25, d.y));
+  float s = max(dot(d, uSunDir), 0.);
+  col += uSunCol*(pow(s,700.)*2.5 + pow(s,8.)*0.10);   // disc + halo
+  gl_FragColor = vec4(pow(col, vec3(0.4545)), 1.);
+}`;
+const oceanMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(EARTH_R, 96, 64),
+  new THREE.ShaderMaterial({vertexShader:cloudVert, fragmentShader:oceanFrag,
+    uniforms:Object.assign({}, CG, OCU)}));
+oceanMesh.position.y = -(EARTH_R + ALT);
+oceanMesh.visible = false;
+world.add(oceanMesh);
+const domeMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(28000, 48, 24),
+  new THREE.ShaderMaterial({vertexShader:cloudVert, fragmentShader:domeFrag,
+    uniforms:Object.assign({}, CG, OCU), side:THREE.BackSide, depthWrite:false, depthTest:false}));
+domeMesh.renderOrder = -10;                              // painted first, behind everything
+domeMesh.visible = false;
+world.add(domeMesh);
+function updateSkyBodies(){                              // AR passthrough hides the planet
+  const show = flightMode && (!renderer.xr.isPresenting || backdropOn);
+  oceanMesh.visible = show; domeMesh.visible = show;
+}
+
+// ---------- trails: wingtip vortices, LEX vapour, engine exhaust ----------
+// Crossed gradient-textured planes anchored to the airframe; length/opacity are
+// driven per-frame by airspeed and bank, so they stay off the jet itself and
+// read as streaks shed into the environment.
+const streakTex = (()=>{
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
+  const g = cv.getContext('2d');
+  const lg = g.createLinearGradient(0,0,256,0);          // u=1 is the attachment end
+  lg.addColorStop(0,'rgba(255,255,255,0)'); lg.addColorStop(0.5,'rgba(255,255,255,0.35)');
+  lg.addColorStop(0.92,'rgba(255,255,255,0.95)'); lg.addColorStop(1,'rgba(255,255,255,0.15)');
+  g.fillStyle = lg; g.fillRect(0,0,256,64);
+  g.globalCompositeOperation = 'destination-in';
+  const vg = g.createLinearGradient(0,0,0,64);
+  vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(0.5,'rgba(0,0,0,1)'); vg.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle = vg; g.fillRect(0,0,256,64);
+  const t = new THREE.CanvasTexture(cv); t.encoding = THREE.sRGBEncoding;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.anisotropy = 4;
+  return t;
+})();
+const streakGeo = new THREE.PlaneGeometry(1,1); streakGeo.translate(-0.5, 0, 0); // trails aft
+const streaksGroup = new THREE.Group(); jet.add(streaksGroup);
+function trailSet(points, colorHex, additive){
+  const mat = new THREE.MeshBasicMaterial({map:streakTex, color:colorHex, transparent:true,
+    opacity:0, depthWrite:false, side:THREE.DoubleSide,
+    blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending});
+  const grps = [];
+  for(const p of points){
+    const grp = new THREE.Group();
+    const a = new THREE.Mesh(streakGeo, mat);
+    const b = new THREE.Mesh(streakGeo, mat); b.rotation.x = Math.PI/2;
+    grp.add(a, b); grp.position.set(p[0], p[1], p[2]);
+    streaksGroup.add(grp); grps.push(grp);
+  }
+  return {mat, grps};
+}
+const tipTrail = trailSet([[-2.6, 1.95,  6.15], [-2.6, 1.95, -6.15]], 0xffffff, true);
+const lexTrail = trailSet([[ 0.8, 2.15,  0.9 ], [ 0.8, 2.15, -0.9 ]], 0xdfe9f2, true);
+const exTrail  = trailSet([[-8.7, 1.75,  0.5 ], [-8.7, 1.75, -0.5 ]], 0x4a4e54, false);
+streaksGroup.visible = false;
+
+// ---------- afterburners (flight only) ----------
+const burners = [];
+{
+  const flameGeo = new THREE.ConeGeometry(0.26, 1, 16, 1, true);
+  flameGeo.translate(0, 0.5, 0);            // base at origin, apex at +1 local Y
+  for(const s of [1,-1]){
+    const outer = new THREE.Mesh(flameGeo, new THREE.MeshBasicMaterial({color:0xff8c3a,
+      transparent:true, opacity:0.55, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide}));
+    const core = new THREE.Mesh(flameGeo, new THREE.MeshBasicMaterial({color:0xfff0c8,
+      transparent:true, opacity:0.5, blending:THREE.AdditiveBlending, depthWrite:false}));
+    core.scale.set(0.55, 0.8, 0.55);
+    for(const f of [outer, core]){
+      f.rotation.z = Math.PI/2;             // local +Y (apex) → world −X: flame trails aft
+      f.position.set(-8.64, 1.75, s*0.5);
+      f.visible = false; f.castShadow = false;
+      jet.add(f);
+    }
+    burners.push({outer, core});
+  }
+}
+
+// ---------- custom GLB model support ----------
+// The procedural airframe is regrouped so a loaded .glb can replace it while
+// every system (orbit, timeline, flight dynamics, bank, streaks, burners,
+// held mode, AR) keeps working — they all drive the `jet` group, and the GLB
+// becomes just another child of it. Auto-fit: 17.1 m length, bottom at y0.
+const airframe = new THREE.Group();
+{
+  const keep = new Set([gearG, streaksGroup, ...burners.flatMap(b => [b.outer, b.core])]);
+  for(const c of [...jet.children]) if(!keep.has(c)) airframe.add(c);
+  jet.add(airframe);
+}
+const customWrap = new THREE.Group(); jet.add(customWrap);
+let customModel = null;
+// Align a loaded GLB to the effect anchors (burners x=-8.64, tips z=±6.15):
+// fore/aft + height shift and a size trim, applied to the wrapper so the
+// auto-fit and the ↻ rotation are untouched.
+function resetAlign(){
+  const ax = document.getElementById('alignX'), ay = document.getElementById('alignY'),
+        as = document.getElementById('alignS');
+  ax.value = 0; ay.value = 0; as.value = 1;
+  applyAlign();
+}
+function applyAlign(){
+  const x = parseFloat(document.getElementById('alignX').value);
+  const y = parseFloat(document.getElementById('alignY').value);
+  const s = parseFloat(document.getElementById('alignS').value);
+  customWrap.position.set(x, y, 0);
+  customWrap.scale.setScalar(s);
+  document.getElementById('axV').textContent = x.toFixed(1) + ' m';
+  document.getElementById('ayV').textContent = y.toFixed(1) + ' m';
+  document.getElementById('asV').textContent = Math.round(s*100) + '%';
+}
+for(const id of ['alignX','alignY','alignS'])
+  document.getElementById(id).addEventListener('input', applyAlign);
+
+function clearCustom(){
+  if(customModel){ customWrap.remove(customModel); customModel = null; }
+  customWrap.rotation.set(0,0,0);
+  resetAlign();
+  document.getElementById('alignBox').style.display = 'none';
+  airframe.visible = true;
+  gearG.visible = !flightMode;
+  setStatus('Procedural Hornet restored.');
+}
+function fitCustom(g){
+  const box = new THREE.Box3().setFromObject(g);
+  const size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
+  const s = 17.1 / Math.max(size.x, size.y, size.z, 1e-6);
+  g.scale.setScalar(s);
+  g.position.set(-ctr.x*s, -box.min.y*s, -ctr.z*s);     // centred, bottom on the deck
+}
+function loadGLB(file){
+  if(typeof THREE.GLTFLoader !== 'function'){
+    setStatus('GLTFLoader script did not load (CDN blocked?) — check the network tab, or ask me to inline the loader.');
+    return;
+  }
+  setStatus('Parsing ' + file.name + '…');
+  file.arrayBuffer().then(buf => {
+    try {
+      new THREE.GLTFLoader().parse(buf, '', gltf => {
+        if(customModel) customWrap.remove(customModel);
+        customWrap.rotation.set(0,0,0);
+        customModel = gltf.scene;
+        let meshes = 0;
+        customModel.traverse(o => { if(o.isMesh){ o.castShadow = true; o.receiveShadow = true; meshes++; } });
+        if(!meshes){ setStatus(file.name + ' parsed but contains no meshes.'); customModel = null; return; }
+        fitCustom(customModel);
+        customWrap.add(customModel);
+        airframe.visible = false;
+        gearG.visible = false;
+        resetAlign();
+        document.getElementById('alignBox').style.display = '';
+        setStatus('Loaded ' + file.name + ' — fitted to 17.1 m. ↻ 90° if the nose is off, then use the ALIGN sliders to line the engines up with the exhaust.');
+      }, err => setStatus('GLB parse failed: ' + (err && err.message || err)));
+    } catch(e){ setStatus('GLB load error: ' + e.message); }
+  }).catch(e => setStatus('Could not read file: ' + e.message));
+}
+window.AR_EXPORT = { object: jet };                     // AR composer convention
+
+// ---------- environment switch ----------
+function setEnv(flight){
+  flightMode = flight;
+  deckGroup.visible = !flight;
+  gearG.visible = !flight && !customModel;
+  streaksGroup.visible = flight;
+  for(const b of burners){ b.outer.visible = flight; b.core.visible = flight; }
+  if(!flight){ jet.rotation.set(0,0,0); jet.position.set(0,0,0); }
+  camera.far = flight ? 30000 : 400;                     // see out to the curved horizon
+  camera.updateProjectionMatrix();
+  updateSkyBodies();
+  for(const sp of cloudGroup.children) seedCloud(sp, true);
+  applyCloudDensity();
+  envBtn.textContent = flight ? 'Flight · switch to Deck' : 'Deck · switch to Flight';
+  updateLighting();
+  setStatus(flight ? 'Airborne over open ocean — try Bank and the Dusk preset.' : 'Parked on deck.');
+}
+
+// ---------- per-frame world motion (shared by main loop, AR, and export) ----------
+function advanceWorld(dt, t){
+  const spdF = Math.max(parseFloat(spdEl.value), held ? heldBoost : 0);   // phone swoops rev the jet
+  const bank = THREE.MathUtils.degToRad(parseFloat(bankEl.value));
+  CG.uTime.value = t;
+  CG.uWScale.value = world.scale.x;                // keeps noise AR-scale-stable
+  CG.uStretch.value = flightMode ? 1 + spdF*1.1 : 1;   // environment motion blur
+  if(flightMode){
+    const v = 26 + spdF*130;
+    CG.uTravel.value = (CG.uTravel.value + v*dt) % 262144;   // ocean scroll odometer
+    const st = CG.uStretch.value;
+    for(const m of cloudGroup.children){
+      m.position.x -= v*dt;
+      m.scale.x = m.userData.rx*2.3*st;            // proxy box follows the smear
+      if(m.position.x < -m.userData.limit) seedCloud(m, false);
+    }
+    // attitude: user bank (roll, +X axis) + gentle dynamics
+    jet.rotation.x = bank + Math.sin(t*0.9)*0.04*(0.3+spdF);
+    jet.rotation.z = Math.sin(t*0.6)*0.015;        // pitch bob
+    jet.position.y = Math.sin(t*0.7)*0.35*(0.3+spdF);
+    const bA = Math.min(Math.abs(bank)/1.05, 1);   // 0…1 at 60°
+    // wingtip vortices lengthen with speed, brighten in a bank
+    tipTrail.mat.opacity = 0.06 + spdF*0.22 + bA*0.22;
+    for(const g of tipTrail.grps) g.scale.set(10 + spdF*45, 0.32, 0.32);
+    // LEX vapour is mostly a high-load (banked) effect
+    lexTrail.mat.opacity = spdF*0.08 + bA*(0.25 + 0.35*spdF);
+    for(const g of lexTrail.grps) g.scale.set(3.5 + spdF*9 + bA*7, 0.55, 0.55);
+    // subtle sooty exhaust haze, always on in flight
+    exTrail.mat.opacity = 0.09 + spdF*0.10;
+    for(const g of exTrail.grps) g.scale.set(10 + spdF*26, 0.8, 0.8);
+    // burner flicker + length ∝ airspeed
+    const L = 0.35 + spdF*1.7;
+    for(const b of burners){
+      const fl = 0.9 + Math.random()*0.2;
+      b.outer.scale.set(0.8+spdF*0.4, L*fl, 0.8+spdF*0.4);
+      b.core.scale.set(0.5, L*fl*0.75, 0.5);
+      b.outer.material.opacity = (0.25 + spdF*0.45)*fl;
+      b.core.material.opacity  = (0.2 + spdF*0.4)*fl;
+    }
+  } else {
+    for(const m of cloudGroup.children){           // lazy deck-day drift
+      m.position.x -= 1.4*dt;
+      if(m.position.x < -240) m.position.x += 480;
+    }
+  }
+}
+
+// ---------- lights & sky ----------
+const hemi = new THREE.HemisphereLight(0xbfd6e8, 0x3a3f3a, 0.6); scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -22; sun.shadow.camera.right = 22;
+sun.shadow.camera.top = 22; sun.shadow.camera.bottom = -22;
+sun.shadow.camera.far = 120; sun.shadow.bias = -0.0004;
+scene.add(sun); scene.add(sun.target);
+const fill = new THREE.DirectionalLight(0x8fa8c8, 0.22);
+fill.position.set(-30, 18, -24); scene.add(fill);
+const cockpitGlow = new THREE.PointLight(0xff9a3c, 0, 4, 2);
+cockpitGlow.position.set(5.4, 2.5, 0); jet.add(cockpitGlow);
+
+const SKY_DAY = new THREE.Color(0x8fc1e8), SKY_NIGHT = new THREE.Color(0x0a0f1c),
+      SKY_DUSK = new THREE.Color(0xe8875a), SKY_GREY = new THREE.Color(0x9aa3ab);
+
+function applySky(col, fogNear, fogFar){
+  lastSkyCol.copy(col);
+  CG.uFogC.value.copy(col);
+  if(renderer.xr.isPresenting){                        // AR owns background/fog
+    CG.uFogN.value = 1e5; CG.uFogF.value = 1e6;        // no fog fade over passthrough
+    return;
+  }
+  CG.uFogN.value = fogNear; CG.uFogF.value = fogFar;
+  if(!scene.fog) scene.fog = new THREE.Fog(0x000000, fogNear, fogFar);   // self-heal after AR
+  if(!(scene.background && scene.background.isColor)) scene.background = new THREE.Color();
+  scene.background.copy(col);
+  scene.fog.color.copy(col); scene.fog.near = fogNear; scene.fog.far = fogFar;
+}
+function updateLighting(){
+  const h = parseFloat(todEl.value), ov = parseFloat(ovcEl.value);
+  todVal.textContent = h.toFixed(1) + 'h';
+  const elevFrac = Math.sin((h - 6) / 12 * Math.PI);
+  const maxElev = THREE.MathUtils.degToRad(62);
+  const elev = elevFrac * maxElev;
+  const az = (h - 6) / 12 * Math.PI;                   // E → S → W
+  const R = 60;
+  sun.position.set(Math.cos(az)*Math.cos(elev)*R, Math.sin(elev)*R, -Math.sin(az)*Math.cos(elev)*R);
+  sun.target.position.set(0,0,0);
+  const dayF = THREE.MathUtils.clamp(elevFrac*3, 0, 1);
+  const night = THREE.MathUtils.clamp((0.04 - elevFrac)*8, 0, 1);
+  const horizon = THREE.MathUtils.clamp(1 - Math.abs(elevFrac)*4, 0, 1) * (elevFrac > -0.12 ? 1 : 0);
+  sun.visible = elevFrac > 0.005;
+  sun.intensity = Math.pow(Math.max(elevFrac,0), 0.7) * 1.6 * (1 - 0.85*ov);
+  sun.color.setHex(0xffffff).lerp(new THREE.Color(0xffb066), horizon*0.85);
+  hemi.intensity = 0.18 + 0.7*dayF*(1 - 0.25*ov) + 0.25*ov*dayF;
+  fill.intensity = 0.1 + 0.18*dayF;
+  const sky = SKY_NIGHT.clone().lerp(SKY_DAY, dayF).lerp(SKY_DUSK, horizon*0.5).lerp(SKY_GREY, 0.7*ov*dayF);
+  hemi.color.copy(sky).lerp(new THREE.Color(0xffffff), 0.3);
+  // flight = inside the weather: fog pulls in with cloud cover; deck sees far cumulus
+  const cd = parseFloat(cldEl.value);
+  if(flightMode) applySky(sky, 24 - 8*ov - 6*cd, 170 - 60*ov - 35*cd);
+  else applySky(sky, 40 - 18*ov, 260 - 120*ov);
+  // volumetric cloud lighting: sun direction/colour, ambient gradient, dusk warmth
+  CG.uSunDir.value.copy(sun.position).normalize();
+  CG.uSunCol.value.copy(sun.color).multiplyScalar(sun.visible ? sun.intensity*1.15 : 0)
+    .add(new THREE.Color(0.05, 0.06, 0.10).multiplyScalar(0.4 + night));   // moon/star floor
+  CG.uAmbT.value.copy(sky).lerp(new THREE.Color(0xffffff), 0.45).multiplyScalar(0.85 + 0.35*dayF);
+  CG.uAmbB.value.copy(sky).multiplyScalar(0.3 + 0.25*dayF)
+    .lerp(new THREE.Color(0xffb98a), horizon*0.25);                        // dusk underlighting
+  // planet + atmosphere palette
+  OCU.uZenith.value.copy(sky).multiplyScalar(0.55).lerp(new THREE.Color(0x123a66), 0.35*dayF);
+  OCU.uHorizon.value.copy(sky).lerp(new THREE.Color(0xffffff), 0.45*dayF + 0.08)
+    .lerp(SKY_DUSK, horizon*0.45);
+  OCU.uWater.value.setHex(0x0a2e4a).multiplyScalar(0.12 + 0.9*dayF)
+    .lerp(new THREE.Color(0x1c1408), horizon*0.2);
+  if(flightMode) CG.uFogC.value.lerp(new THREE.Color(0xffffff), 0.35*dayF);  // clouds melt into haze
+  for(const b of navBulbs) b.material.emissiveIntensity = night * 1.6;
+  cockpitGlow.intensity = night * 0.8;
+  for(const p of floodLights) p.intensity = night * 1.5;
+  matCanopy.emissive.setHex(0x2a3a2a).multiplyScalar(night*0.5);
+}
+const todEl = document.getElementById('tod'), ovcEl = document.getElementById('ovc'),
+      cldEl = document.getElementById('cld'), spdEl = document.getElementById('spd'),
+      bankEl = document.getElementById('bank'), bankVal = document.getElementById('bankVal'),
+      todVal = document.getElementById('todVal'), envBtn = document.getElementById('envBtn');
+todEl.addEventListener('input', updateLighting);
+ovcEl.addEventListener('input', updateLighting);
+cldEl.addEventListener('input', () => { applyCloudDensity(); updateLighting(); });
+bankEl.addEventListener('input', () => { bankVal.textContent = bankEl.value + '°'; });
+envBtn.addEventListener('click', () => setEnv(!flightMode));
+const glbFile = document.getElementById('glbFile');
+document.getElementById('glbLoad').addEventListener('click', () => glbFile.click());
+glbFile.addEventListener('change', () => { if(glbFile.files[0]) loadGLB(glbFile.files[0]); glbFile.value = ''; });
+document.getElementById('glbRot').addEventListener('click', () => {
+  if(customModel) customWrap.rotation.y += Math.PI/2;
+});
+document.getElementById('glbClear').addEventListener('click', clearCustom);
+document.querySelectorAll('.row.mini button').forEach(b =>
+  b.addEventListener('click', () => { todEl.value = b.dataset.h; updateLighting(); }));
+
+// ---------- free orbit (hand-rolled) ----------
+const target = new THREE.Vector3(0, 1.9, 0);
+let theta = 0.95, phi = 1.18, radius = 17;
+function clampOrbit(){
+  phi = THREE.MathUtils.clamp(phi, 0.3, 1.53);
+  radius = THREE.MathUtils.clamp(radius, 2.5, 70);
+  target.x = THREE.MathUtils.clamp(target.x, -30, 30);
+  target.z = THREE.MathUtils.clamp(target.z, -30, 30);
+  target.y = THREE.MathUtils.clamp(target.y, 0, 12);
+}
+function updateCamera(){
+  clampOrbit();
+  camera.position.set(
+    target.x + radius*Math.sin(phi)*Math.sin(theta),
+    target.y + radius*Math.cos(phi),
+    target.z + radius*Math.sin(phi)*Math.cos(theta));
+  camera.lookAt(target);
+}
+function backSolve(){
+  const off = camera.position.clone().sub(target);
+  radius = off.length();
+  phi = Math.acos(THREE.MathUtils.clamp(off.y/radius, -1, 1));
+  theta = Math.atan2(off.x, off.z);
+  clampOrbit();
+}
+function pan(dx, dy){
+  const dir = target.clone().sub(camera.position).normalize();
+  const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0,1,0)).normalize();
+  const upScr = new THREE.Vector3().crossVectors(right, dir).normalize();
+  const per = radius * 0.0015;
+  target.addScaledVector(right, -dx*per).addScaledVector(upScr, dy*per);
+}
+const pointers = new Map();
+let prevPinch = null;
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, {x:e.clientX, y:e.clientY, button:e.button, shift:e.shiftKey, type:e.pointerType});
+});
+canvas.addEventListener('pointermove', e => {
+  const p = pointers.get(e.pointerId); if(!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  const touches = [...pointers.values()].filter(q => q.type === 'touch').length;
+  if(pointers.size === 1 && touches < 2){
+    if(p.button === 2 || p.shift) pan(dx, dy);
+    else { theta -= dx*0.0052; phi -= dy*0.0052; }
+    updateCamera();
+  } else if(pointers.size === 2){
+    const pts = [...pointers.values()];
+    const d = Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+    const cx = (pts[0].x+pts[1].x)/2, cy = (pts[0].y+pts[1].y)/2;
+    if(prevPinch){
+      radius *= THREE.MathUtils.clamp(prevPinch.d/d, 0.9, 1.1) ** 1.4;
+      pan(cx - prevPinch.x, cy - prevPinch.y);
+    }
+    prevPinch = {d, x:cx, y:cy};
+    updateCamera();
+  }
+});
+function dropPointer(e){ pointers.delete(e.pointerId); if(pointers.size < 2) prevPinch = null; }
+canvas.addEventListener('pointerup', dropPointer);
+canvas.addEventListener('pointercancel', dropPointer);
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  radius *= Math.exp(e.deltaY * 0.0011);
+  updateCamera();
+}, {passive:false});
+let triStart = 0;
+canvas.addEventListener('touchstart', e => { e.preventDefault();
+  if(e.touches.length === 3) triStart = performance.now(); }, {passive:false});
+canvas.addEventListener('touchmove', e => e.preventDefault(), {passive:false});
+canvas.addEventListener('touchend', e => {
+  if(e.touches.length === 0 && triStart && performance.now() - triStart < 450) toggleUI();
+  if(e.touches.length === 0) triStart = 0;
+});
+addEventListener('keydown', e => { if(e.key === 'h' || e.key === 'H') toggleUI(); });
+function toggleUI(){ document.body.classList.toggle('ui-hidden'); }
+
+// ---------- keyframe timeline ----------
+const DUR = 8;
+const defaultKeys = [
+  {t:0.0, pos:new THREE.Vector3(13.0, 4.2,  9.5)},
+  {t:2.7, pos:new THREE.Vector3( 6.8, 2.7,  4.6)},
+  {t:5.3, pos:new THREE.Vector3(-10.0, 3.6, -7.5)},
+  {t:8.0, pos:new THREE.Vector3(15.0, 7.5,-11.0)},
+];
+let keys = defaultKeys.map(k => ({t:k.t, pos:k.pos.clone()}));
+let playing = false, playhead = 0;
+
+function catmull(p0,p1,p2,p3,u,out){ // u=0 → p1, u=1 → p2 (verified numerically)
+  const u2 = u*u, u3 = u2*u;
+  out.set(0,0,0)
+    .addScaledVector(p1, 2)
+    .addScaledVector(p0, -u).addScaledVector(p2, u)
+    .addScaledVector(p0, 2*u2).addScaledVector(p1, -5*u2).addScaledVector(p2, 4*u2).addScaledVector(p3, -u2)
+    .addScaledVector(p0, -u3).addScaledVector(p1, 3*u3).addScaledVector(p2, -3*u3).addScaledVector(p3, u3)
+    .multiplyScalar(0.5);
+  return out;
+}
+const _ev = new THREE.Vector3();
+function evalCamera(t){
+  const ks = [...keys].sort((a,b)=>a.t-b.t);
+  if(!ks.length) return null;
+  if(ks.length === 1 || t <= ks[0].t) return _ev.copy(ks[0].pos);
+  if(t >= ks[ks.length-1].t) return _ev.copy(ks[ks.length-1].pos);
+  let i = 0; while(t > ks[i+1].t) i++;
+  const u = (t - ks[i].t) / (ks[i+1].t - ks[i].t);
+  const p0 = (ks[i-1]||ks[i]).pos, p3 = (ks[i+2]||ks[i+1]).pos;
+  return catmull(p0, ks[i].pos, ks[i+1].pos, p3, u, _ev);
+}
+function setCameraAt(t){
+  const p = evalCamera(t); if(!p) return;
+  camera.position.copy(p); camera.lookAt(target);
+}
+const scrub = document.getElementById('scrub'), tw = document.getElementById('trackWrap'),
+      ttime = document.getElementById('ttime'), playBtn = document.getElementById('play');
+function refreshMarkers(){
+  tw.querySelectorAll('.key').forEach(el => el.remove());
+  for(const k of keys){
+    const el = document.createElement('div'); el.className = 'key';
+    el.style.left = (7 + (k.t/DUR)*(tw.clientWidth-14)) + 'px';
+    tw.appendChild(el);
+  }
+}
+function setPlayhead(t, drive){
+  playhead = THREE.MathUtils.clamp(t, 0, DUR);
+  scrub.value = playhead; ttime.textContent = playhead.toFixed(2)+'s';
+  if(drive && keys.length){ setCameraAt(playhead); backSolve(); }
+}
+scrub.addEventListener('input', () => { playing = false; playBtn.textContent = '▶'; setPlayhead(parseFloat(scrub.value), true); });
+playBtn.addEventListener('click', () => {
+  if(!keys.length){ setStatus('Add a key first.'); return; }
+  playing = !playing; playBtn.textContent = playing ? '❚❚' : '▶';
+  if(playing && playhead >= DUR - 0.01) playhead = 0;
+});
+document.getElementById('addKey').addEventListener('click', () => {
+  const ex = keys.find(k => Math.abs(k.t - playhead) < 0.15);
+  if(ex) ex.pos.copy(camera.position);
+  else keys.push({t:playhead, pos:camera.position.clone()});
+  refreshMarkers(); setStatus('Key ' + (ex?'replaced':'added') + ' @ ' + playhead.toFixed(2) + 's');
+});
+document.getElementById('clearKeys').addEventListener('click', () => { keys = []; refreshMarkers(); setStatus('Track cleared.'); });
+document.getElementById('resetKeys').addEventListener('click', () => {
+  keys = defaultKeys.map(k => ({t:k.t, pos:k.pos.clone()})); refreshMarkers(); setStatus('Default move restored.');
+});
+function setStatus(s){ document.getElementById('status').textContent = s; }
+
+// ---------- video export ----------
+let recording = false, exportWide = true;
+const orientBtn = document.getElementById('orient');
+orientBtn.addEventListener('click', () => {
+  exportWide = !exportWide;
+  orientBtn.textContent = exportWide ? '16:9 · 1920×1080' : '9:16 · 1080×1920';
+});
+document.getElementById('render').addEventListener('click', () => {
+  if(recording || renderer.xr.isPresenting) return;
+  if(!keys.length){ setStatus('Timeline is empty — add a key first.'); return; }
+  const W = exportWide ? 1920 : 1080, H = exportWide ? 1080 : 1920;
+  const mimes = ['video/mp4;codecs="avc1.42E01E"','video/mp4','video/webm;codecs=vp9','video/webm'];
+  const mime = mimes.find(m => MediaRecorder.isTypeSupported(m));
+  if(!mime){ setStatus('This browser cannot record video.'); return; }
+  const ext = mime.includes('mp4') ? 'mp4' : 'webm';
+  setStatus('Rendering ' + W + '×' + H + ' ' + ext.toUpperCase() +
+    (ext==='webm' ? ' (MP4 not supported here — WebM fallback)' : '') + '…');
+  recording = true; playing = false; playBtn.textContent = '▶';
+  const oldPR = renderer.getPixelRatio();
+  renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+  camera.aspect = W/H; camera.updateProjectionMatrix();
+  const stream = canvas.captureStream(60);
+  const rec = new MediaRecorder(stream, {mimeType:mime, videoBitsPerSecond:18e6});
+  const chunks = [];
+  rec.ondataavailable = e => { if(e.data.size) chunks.push(e.data); };
+  rec.onstop = () => {
+    const blob = new Blob(chunks, {type:mime});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'fa18-hornet-' + (exportWide?'16x9':'9x16') + '.' + ext;
+    a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+    renderer.setPixelRatio(oldPR); renderer.setSize(innerWidth, innerHeight);
+    camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+    recording = false; setPlayhead(0, true);
+    setStatus('Saved ' + a.download + '.');
+  };
+  rec.start();
+  const t0 = performance.now();
+  let prevT = 0;
+  (function tick(){
+    const t = (performance.now() - t0) / 1000;
+    if(t >= DUR){ rec.stop(); return; }
+    advanceWorld(t - prevT, t); prevT = t;
+    setPlayhead(Math.min(t, DUR), false);
+    setCameraAt(t);
+    renderer.render(scene, camera);
+    requestAnimationFrame(tick);          // export runs its own RAF; main loop early-returns
+  })();
+});
+
+// ---------- AR ----------
+const overlayRoot = document.getElementById('overlayRoot');
+const arBtn = document.getElementById('arBtn');
+let xrSession = null, hitTestSource = null, reticle, placed = false;
+let arScale = 0.012, dirty = false, dirtyTimer = 0, lastMultiEnd = 0;
+let backdropOn = false;
+// "picked up" mode: the jet hangs off the phone on a damped virtual spring
+let held = false, heldBoost = 0;
+const holdOffset = new THREE.Vector3(0, -0.10, -0.85);   // camera-space perch
+const _qY90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.PI/2);
+const _camP = new THREE.Vector3(), _camQ = new THREE.Quaternion(), _camS = new THREE.Vector3();
+const _prevCamP = new THREE.Vector3(), _tgtP = new THREE.Vector3(), _tgtQ = new THREE.Quaternion();
+const _velC = new THREE.Vector3(), _qRoll = new THREE.Quaternion(), _qPitch = new THREE.Quaternion();
+let heldRoll = 0, heldPitch = 0, heldInit = false;
+// pose relative to the phone, captured at grab time — so grabbing never resets anything
+const grabP = new THREE.Vector3().copy(holdOffset);
+const grabQ = new THREE.Quaternion().copy(_qY90);
+const _tmpQ = new THREE.Quaternion();
+const savedWorld = {pos:new THREE.Vector3(), rot:new THREE.Euler(), scl:new THREE.Vector3()};
+
+function followPhone(dt){
+  const cam = renderer.xr.getCamera(camera);
+  cam.matrixWorld.decompose(_camP, _camQ, _camS);
+  if(!heldInit){ _prevCamP.copy(_camP); heldInit = true; }
+  // device velocity in camera space drives bank/pitch/effects
+  _velC.copy(_camP).sub(_prevCamP).divideScalar(Math.max(dt, 1e-3));
+  _prevCamP.copy(_camP);
+  _velC.applyQuaternion(_camQ.clone().invert());
+  const spd = Math.min(_velC.length()/2.5, 1);
+  heldBoost += (spd - heldBoost)*(1 - Math.exp(-dt*3));            // feeds airspeed effects
+  heldRoll  += (THREE.MathUtils.clamp( _velC.x*0.45, -0.55, 0.55) - heldRoll )*(1 - Math.exp(-dt*4));
+  heldPitch += (THREE.MathUtils.clamp( _velC.y*0.30, -0.30, 0.30) - heldPitch)*(1 - Math.exp(-dt*4));
+  // target: hold the pose it had at grab time, rigid to the phone, leaning into motion
+  _tgtP.copy(grabP).applyQuaternion(_camQ).add(_camP);
+  _qRoll.setFromAxisAngle(new THREE.Vector3(1,0,0), heldRoll);     // roll about the nose axis
+  _qPitch.setFromAxisAngle(new THREE.Vector3(0,0,1), heldPitch);   // pitch about the span axis
+  _tgtQ.copy(_camQ).multiply(grabQ).multiply(_qRoll).multiply(_qPitch);
+  // critically-damped chase — this lag is what makes it feel caught, not glued
+  world.position.lerp(_tgtP, 1 - Math.exp(-dt*10));
+  world.quaternion.slerp(_tgtQ, 1 - Math.exp(-dt*7));
+}
+function setHeld(on){
+  held = on;
+  if(on){
+    if(!flightMode) setEnv(true);                  // gear up, streaks + burners live
+    const cam = renderer.xr.getCamera(camera);
+    cam.matrixWorld.decompose(_camP, _camQ, _camS);
+    if(placed && world.visible){
+      // grab it EXACTLY as it stands: store pose relative to the phone, no snap
+      _tmpQ.copy(_camQ).invert();
+      grabP.copy(world.position).sub(_camP).applyQuaternion(_tmpQ);
+      grabQ.copy(_tmpQ).multiply(world.quaternion);
+    } else {                                       // nothing placed yet: classic perch
+      grabP.copy(holdOffset);
+      grabQ.copy(_qY90);
+      world.scale.setScalar(arScale);
+    }
+    placed = true; world.visible = true;
+    heldInit = false; heldBoost = 0; heldRoll = 0; heldPitch = 0;
+    cloudGroup.visible = backdropOn;               // no cloud clutter riding the phone
+    document.getElementById('arHint').textContent =
+      'Move the phone — it flies from right where you grabbed it · pinch scales · RELEASE parks it';
+  } else {
+    heldBoost = 0;
+    cloudGroup.visible = true; applyCloudDensity();
+    document.getElementById('arHint').textContent =
+      'Tap a surface to place · 1 finger rotates · 2 fingers move + pinch · 3-finger tap hides UI';
+  }
+  document.getElementById('arGrab').textContent = on ? 'Release' : 'Grab';
+}
+
+reticle = new THREE.Mesh(
+  new THREE.RingGeometry(0.06, 0.075, 32).rotateX(-Math.PI/2),
+  new THREE.MeshBasicMaterial({color:0xd9b25e}));
+reticle.matrixAutoUpdate = false; reticle.visible = false;
+scene.add(reticle);
+
+if(navigator.xr && navigator.xr.isSessionSupported){
+  navigator.xr.isSessionSupported('immersive-ar').then(ok => { if(ok) arBtn.style.display = ''; });
+}
+arBtn.addEventListener('click', async () => {
+  const tries = [
+    {requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{root:overlayRoot}},
+    {requiredFeatures:['hit-test']},
+    {optionalFeatures:['hit-test','dom-overlay'], domOverlay:{root:overlayRoot}},
+    {}
+  ];
+  xrSession = null;
+  for(const opt of tries){
+    try { xrSession = await navigator.xr.requestSession('immersive-ar', opt); break; } catch(e){}
+  }
+  if(!xrSession){
+    setStatus('AR failed to start. Serve this file over HTTPS (e.g. GitHub Pages) — file:// and content:// block AR.');
+    return;
+  }
+  renderer.xr.setReferenceSpaceType('local');
+  // Perf: render the XR framebuffer at 80% — must be set BEFORE the session binds
+  if(renderer.xr.setFramebufferScaleFactor) renderer.xr.setFramebufferScaleFactor(0.8);
+  await renderer.xr.setSession(xrSession);
+  CG.uQuality.value = 0;                              // clouds: 12 steps, 3 octaves, 2 shadow taps
+  applyCloudDensity();                                // and about half the population
+  try {
+    const viewerSpace = await xrSession.requestReferenceSpace('viewer');
+    hitTestSource = await xrSession.requestHitTestSource({space:viewerSpace});
+  } catch(e){ hitTestSource = null; }
+  savedWorld.pos.copy(world.position); savedWorld.rot.copy(world.rotation); savedWorld.scl.copy(world.scale);
+  scene.background = null; scene.fog = null;
+  world.visible = false; placed = false; dirty = false; backdropOn = false;
+  document.body.classList.add('ui-hidden');           // desktop panels: opacity only
+  overlayRoot.classList.add('ar-active');
+  overlayRoot.classList.remove('hud-off');
+  updateSkyBodies();                                  // planet only shows over BACKDROP
+  xrSession.addEventListener('select', onARSelect);
+  xrSession.addEventListener('end', onAREnd);
+});
+function onARSelect(){
+  if(dirty || held) return;                            // gesture in flight / carried → no placement
+  world.visible = true; placed = true;
+  world.scale.setScalar(arScale);
+  if(reticle.visible){
+    world.position.setFromMatrixPosition(reticle.matrix);
+  } else {                                             // no hit-test: ~1.6 m ahead, ~1.3 m below eye
+    const cam = renderer.xr.getCamera(camera);
+    const dir = new THREE.Vector3(0,0,-1).applyQuaternion(cam.quaternion);
+    dir.y = 0; dir.normalize();
+    world.position.copy(cam.position).addScaledVector(dir, 1.6);
+    world.position.y = cam.position.y - 1.3;
+  }
+}
+function onAREnd(){
+  xrSession = null; hitTestSource = null; reticle.visible = false;
+  CG.uQuality.value = 1;
+  applyCloudDensity();
+  if(held) setHeld(false);
+  world.visible = true;
+  world.position.copy(savedWorld.pos); world.rotation.copy(savedWorld.rot); world.scale.copy(savedWorld.scl);
+  overlayRoot.classList.remove('ar-active','hud-off');
+  document.body.classList.remove('ui-hidden');
+  updateLighting();                                    // applySky self-heals background + fog
+  updateSkyBodies();
+  updateCamera();
+}
+function guardTap(fn){ // swallow ghost clicks from multi-touch fingers landing on buttons
+  return () => { if(performance.now() - lastMultiEnd < 450) return; fn(); };
+}
+document.getElementById('arPlus').addEventListener('click', guardTap(() => {
+  arScale = THREE.MathUtils.clamp(arScale*1.3, 0.002, 0.25); if(placed) world.scale.setScalar(arScale);
+}));
+document.getElementById('arMinus').addEventListener('click', guardTap(() => {
+  arScale = THREE.MathUtils.clamp(arScale/1.3, 0.002, 0.25); if(placed) world.scale.setScalar(arScale);
+}));
+document.getElementById('arGrab').addEventListener('click', guardTap(() => setHeld(!held)));
+document.getElementById('arBackdrop').addEventListener('click', guardTap(() => {
+  backdropOn = !backdropOn;
+  scene.background = backdropOn ? lastSkyCol.clone() : null;   // masks passthrough → fully virtual
+  if(held) cloudGroup.visible = backdropOn;
+  updateSkyBodies();
+}));
+document.getElementById('arExit').addEventListener('click', guardTap(() => { if(xrSession) xrSession.end(); }));
+
+// XR transient-input gestures (dom-overlay drops multi-touch DOM events — read input sources)
+let prevPts = [], prevCount = 0, triTime = 0, triTravel = 0, triOrigin = null;
+const _v = new THREE.Vector3(), _o = new THREE.Vector3(), _z = new THREE.Vector3();
+function arGestures(frame){
+  const session = renderer.xr.getSession(); if(!session) return;
+  const ref = renderer.xr.getReferenceSpace(); if(!ref) return;
+  const pts = [];
+  for(const src of session.inputSources){
+    if(src.targetRayMode !== 'screen') continue;
+    const pose = frame.getPose(src.targetRaySpace, ref); if(!pose) continue;
+    const m = pose.transform.matrix;
+    _o.set(m[12], m[13], m[14]); _z.set(m[8], m[9], m[10]);
+    pts.push(_o.clone().sub(_z));                      // 1 m along the ray
+  }
+  const cam = renderer.xr.getCamera(camera);
+  const n = pts.length;
+  if(n >= 2) dirty = true;
+  if(n === 3 && prevCount !== 3){ triTime = performance.now(); triTravel = 0;
+    triOrigin = pts[0].clone().add(pts[1]).add(pts[2]).multiplyScalar(1/3); }
+  if(n === 3 && triOrigin){
+    const c = pts[0].clone().add(pts[1]).add(pts[2]).multiplyScalar(1/3);
+    triTravel = Math.max(triTravel, c.distanceTo(triOrigin));
+  }
+  if(n === 1 && prevCount === 1 && placed && !held){
+    const yaw = p => { _v.copy(p).applyMatrix4(cam.matrixWorldInverse); return Math.atan2(_v.x, -_v.z); };
+    let d = yaw(pts[0]) - yaw(prevPts[0]);
+    if(d >  Math.PI) d -= 2*Math.PI;
+    if(d < -Math.PI) d += 2*Math.PI;
+    world.rotation.y += d * 3.2;
+    if(Math.abs(d) > 0.015) dirty = true;
+  }
+  if(n === 2 && prevCount === 2 && placed){
+    if(!held){
+      const c  = pts[0].clone().add(pts[1]).multiplyScalar(0.5);
+      const pc = prevPts[0].clone().add(prevPts[1]).multiplyScalar(0.5);
+      const dist = cam.position.distanceTo(world.position);
+      world.position.addScaledVector(c.sub(pc), dist); // full 3D grab: sideways slides, up/down lifts
+    }
+    const d1 = pts[0].distanceTo(pts[1]), d0 = prevPts[0].distanceTo(prevPts[1]);
+    if(d0 > 1e-4){
+      arScale = THREE.MathUtils.clamp(arScale * d1/d0, 0.002, 0.25);
+      world.scale.setScalar(arScale);
+    }
+  }
+  if(n === 0 && prevCount > 0){
+    if(prevCount >= 2) lastMultiEnd = performance.now();
+    if(prevCount === 3 && performance.now() - triTime < 450 && triTravel < 0.04)
+      overlayRoot.classList.toggle('hud-off');          // opacity-only — NEVER display on the overlay
+    clearTimeout(dirtyTimer);
+    dirtyTimer = setTimeout(() => { dirty = false; }, 150);
+  }
+  prevPts = pts; prevCount = n;
+}
+
+// ---------- main loop (WebXR-safe) ----------
+const clock = new THREE.Clock();
+renderer.setAnimationLoop((time, frame) => {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  if(recording) return;                                // export owns rendering
+  advanceWorld(dt, clock.elapsedTime);
+  if(frame){
+    if(hitTestSource && !held){
+      const ref = renderer.xr.getReferenceSpace();
+      const hits = frame.getHitTestResults(hitTestSource);
+      if(hits.length){
+        const pose = hits[0].getPose(ref);
+        reticle.visible = true;
+        reticle.matrix.fromArray(pose.transform.matrix);
+      } else reticle.visible = false;
+    } else if(held) reticle.visible = false;
+    arGestures(frame);
+    if(held) followPhone(dt);
+    renderer.render(scene, camera);
+    return;
+  }
+  if(playing){
+    playhead += dt;
+    if(playhead >= DUR){ playhead = DUR; playing = false; playBtn.textContent = '▶'; backSolve(); }
+    setPlayhead(playhead, false);
+    setCameraAt(playhead);
+    if(!playing) backSolve();
+  }
+  renderer.render(scene, camera);
+});
+
+addEventListener('resize', () => {
+  if(recording || renderer.xr.isPresenting) return;
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  refreshMarkers();
+});
+
+// ---------- boot ----------
+applyCloudDensity();
+updateLighting();
+updateCamera();
+setCameraAt(0); backSolve(); updateCamera();
+refreshMarkers();
+setStatus('Ready — press ▶ for the default camera move.');
+</script>
+</body>
+</html>
