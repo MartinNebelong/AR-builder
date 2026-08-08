@@ -429,18 +429,28 @@ async function startAR(){
     catch (e) { lastErr = e; }
   }
   if (!session){ warn('AR session failed: ' + (lastErr && lastErr.message || lastErr)); return; }
-  xrSession = session;
-  camAccessOK = session.enabledFeatures ? session.enabledFeatures.includes('camera-access') : true;
-  warnedNoCam = false;
-  glBinding = new XRWebGLBinding(session, gl);
-  session.addEventListener('select', onXRSelect);
-  session.addEventListener('end', onSessionEnd);
-  await renderer.xr.setSession(session);
-  xrRefSpace = renderer.xr.getReferenceSpace();
-  $('landing').style.display = 'none';
-  $('hud').classList.add('active');
-  $('hint').textContent = camAccessOK ? 'arm ✂ then drag a rectangle over something real'
-    : '⚠ no camera access — cutouts will be blank';
+  try {
+    xrSession = session;
+    warnedNoCam = false;
+    session.addEventListener('select', onXRSelect);
+    session.addEventListener('end', onSessionEnd);
+    await renderer.xr.setSession(session);          // makes GL context XR-compatible
+    xrRefSpace = renderer.xr.getReferenceSpace();
+    camAccessOK = session.enabledFeatures ? session.enabledFeatures.includes('camera-access') : true;
+    glBinding = null;
+    if (camAccessOK){
+      try { glBinding = new XRWebGLBinding(session, gl); }   // must come AFTER setSession
+      catch (e) { camAccessOK = false; console.warn('XRWebGLBinding failed:', e); }
+    }
+    $('landing').style.display = 'none';
+    $('hud').classList.add('active');
+    $('hint').textContent = camAccessOK ? 'arm ✂ then drag a rectangle over something real'
+      : '⚠ no camera access — cutouts will be blank';
+  } catch (e) {
+    warn('AR start failed: ' + (e && e.message || e));
+    try { session.end(); } catch (_) {}
+    xrSession = null;
+  }
 }
 function onSessionEnd(){
   xrSession = null; glBinding = null; pendingRect = null;
