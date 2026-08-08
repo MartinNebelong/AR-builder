@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Paper Cutouts — AR Reality Editor</title>
 <style>
-  :root{ --gold:#d9b25e; --panel:rgba(22,26,30,.88); }
+  :root{ --gold:#d9b25e; --panel:rgba(22,26,30,.88);
+    --topSafe:max(44px, calc(env(safe-area-inset-top) + 10px)); }
   *{ box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
   html,body{ width:100%; height:100%; overflow:hidden; background:#0b0d10;
     font-family:Helvetica,Arial,sans-serif; color:#e8e6e0; }
@@ -40,12 +41,12 @@
   /* ---------- HUD (dom-overlay root — NEVER display:none this) ---------- */
   #hud{ position:fixed; inset:0; z-index:30; pointer-events:none; display:none; }
   #hud.active{ display:block; }
-  #topbar{ position:absolute; top:calc(10px + env(safe-area-inset-top)); left:10px; right:10px;
+  #topbar{ position:absolute; top:var(--topSafe); left:10px; right:10px;
     display:flex; gap:8px; align-items:center; pointer-events:none; transition:opacity .25s; }
   #topbar button{ pointer-events:auto; }
   #hint{ flex:1; text-align:center; font-size:11px; letter-spacing:.08em; color:#cfd4d8;
     text-shadow:0 1px 4px rgba(0,0,0,.8); pointer-events:none; }
-  #distwrap{ position:absolute; right:10px; top:calc(64px + env(safe-area-inset-top)); width:150px;
+  #distwrap{ position:absolute; right:10px; top:calc(var(--topSafe) + 54px); width:150px;
     padding:9px 11px; pointer-events:auto; transition:opacity .25s; }
   #distwrap .lbl{ display:flex; justify-content:space-between; margin-bottom:4px; }
 
@@ -374,7 +375,7 @@ $('btnDraw').addEventListener('click', () => {
   $('btnDraw').classList.toggle('on', drawArmed);
   drawLayer.classList.toggle('armed', drawArmed);
   $('hint').textContent = drawArmed ? 'drag a rectangle over something real'
-                                    : 'tap a cutout to edit it';
+                                    : 'tap a cutout to edit · double-tap to carry';
 });
 
 drawLayer.addEventListener('pointerdown', e => {
@@ -454,6 +455,7 @@ async function startAR(){
 }
 function onSessionEnd(){
   xrSession = null; glBinding = null; pendingRect = null;
+  heldCut = null; lastTap = { t:0, cut:null };
   $('hud').classList.remove('active');
   document.body.classList.remove('uiHidden');
   closePromptBar();
@@ -466,10 +468,34 @@ $('btnExit').addEventListener('click', () => {
   else if (deskActive) stopDesktop();
 });
 
-/* ---- tap-select in AR via XR select ray (drawLayer off) ---- */
+/* ---- tap-select in AR via XR select ray (drawLayer off) ----
+   single tap plane = select+prompt · DOUBLE tap plane = pick up (rigid rod
+   to the phone: pose relative to camera frozen at grab) · any tap = drop */
 const raycaster = new THREE.Raycaster();
+let heldCut = null;
+const grabOffset = new THREE.Matrix4();
+let lastTap = { t:0, cut:null };
+
+function pickUp(cut, frame){
+  const pose = frame.getViewerPose(xrRefSpace);
+  if (!pose || !pose.views.length) return;
+  const camM = new THREE.Matrix4().fromArray(pose.views[0].transform.matrix);
+  cut.mesh.updateMatrixWorld();
+  grabOffset.copy(camM).invert().multiply(cut.mesh.matrixWorld);  // freeze relative pose
+  heldCut = cut;
+  closePromptBar();
+  cut.mesh.material.color.set(0xfff2cf);
+  $('hint').textContent = '📌 carrying — walk it into place, tap anywhere to drop';
+}
+function dropHeld(){
+  if (heldCut) heldCut.mesh.material.color.set(0xffffff);
+  heldCut = null;
+  $('hint').textContent = 'tap a cutout to edit · double-tap to carry';
+}
+
 function onXRSelect(e){
   if (drawArmed || !xrRefSpace) return;
+  if (heldCut){ dropHeld(); return; }                 // any tap drops the carried plane
   const pose = e.frame.getPose(e.inputSource.targetRaySpace, xrRefSpace);
   if (!pose) return;
   const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
@@ -478,10 +504,20 @@ function onXRSelect(e){
   raycaster.set(origin, dir);
   const meshes = cuts.filter(c => c.mesh).map(c => c.mesh);
   const hit = raycaster.intersectObjects(meshes)[0];
+  const now = performance.now();
   if (hit){
     const cut = cuts.find(c => c.mesh === hit.object);
+    if (lastTap.cut === cut && now - lastTap.t < 450){  // double tap → pick up
+      lastTap = { t:0, cut:null };
+      pickUp(cut, e.frame);
+      return;
+    }
+    lastTap = { t:now, cut };
     highlightNone(); selectCut(cut);
-  } else closePromptBar();
+  } else {
+    lastTap = { t:now, cut:null };
+    closePromptBar();
+  }
 }
 
 /* ---- create a cutout plane from a screen rect at settings.dist ---- */
@@ -569,8 +605,8 @@ function processPendingRect(frame){
       $('hint').textContent = '⚠ camera-access denied — blank cutout placed'; }
   }
   cuts.push(cut);
-  $('hint').textContent = drawArmed ? 'cutout placed — draw more, or disarm ✂ and tap it'
-                                    : 'tap a cutout to edit it';
+  $('hint').textContent = drawArmed ? 'cutout placed — draw more, or disarm ✂'
+                                    : 'tap a cutout to edit · double-tap to carry';
 }
 
 /* ---- 3-finger quick tap toggles UI (overlay children opacity ONLY) ---- */
@@ -590,8 +626,17 @@ addEventListener('keydown', e => {
 });
 
 /* ---------------- main loop ---------------- */
+const carryM = new THREE.Matrix4(), carryCam = new THREE.Matrix4();
 renderer.setAnimationLoop((t, frame) => {
   if (frame && pendingRect && xrRefSpace) processPendingRect(frame);
+  if (frame && heldCut && xrRefSpace){                // rigid rod: mesh = camPose × grabOffset
+    const pose = frame.getViewerPose(xrRefSpace);
+    if (pose && pose.views.length){
+      carryCam.fromArray(pose.views[0].transform.matrix);
+      carryM.copy(carryCam).multiply(grabOffset);
+      carryM.decompose(heldCut.mesh.position, heldCut.mesh.quaternion, heldCut.mesh.scale);
+    }
+  }
   renderer.render(scene, camera);
 });
 
