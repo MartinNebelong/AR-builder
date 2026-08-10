@@ -38,20 +38,24 @@
   #warnbar{ display:none; margin-top:12px; padding:9px 11px; border-radius:6px;
     background:rgba(200,80,60,.15); border:1px solid rgba(200,80,60,.4); font-size:11px; line-height:1.5; color:#f0b9a8; }
 
-  /* ---------- HUD (dom-overlay root — NEVER display:none this) ---------- */
-  #hud{ position:fixed; inset:0; z-index:30; pointer-events:none; display:none; }
-  #hud.active{ display:block; }
-  #topbar{ position:absolute; top:var(--topSafe); left:10px; right:10px;
-    display:flex; gap:8px; align-items:center; pointer-events:none; transition:opacity .25s; }
-  #topbar button{ pointer-events:auto; }
+  /* ---------- HUD (dom-overlay root — NEVER display:none this; children
+     are gated on .active so the root itself always stays in layout) ---------- */
+  #hud{ position:fixed; inset:0; z-index:60; pointer-events:none; }
+  #topbar{ position:absolute; top:var(--topSafe); left:10px; right:10px; z-index:2;
+    gap:8px; align-items:center; pointer-events:none; transition:opacity .25s; }
+  #topbar button{ pointer-events:auto; padding:12px 15px; font-size:12px; }
   #hint{ flex:1; text-align:center; font-size:11px; letter-spacing:.08em; color:#cfd4d8;
     text-shadow:0 1px 4px rgba(0,0,0,.8); pointer-events:none; }
-  #distwrap{ position:absolute; right:10px; top:calc(var(--topSafe) + 54px); width:150px;
-    padding:9px 11px; pointer-events:auto; transition:opacity .25s; }
+  #distwrap{ position:absolute; right:10px; top:calc(var(--topSafe) + 58px); width:150px;
+    padding:9px 11px; pointer-events:auto; z-index:2; transition:opacity .25s; }
   #distwrap .lbl{ display:flex; justify-content:space-between; margin-bottom:4px; }
 
-  /* draw layer */
-  #drawLayer{ position:absolute; inset:0; pointer-events:none; touch-action:none; }
+  /* draw layer — sits BELOW the buttons so arming ✂ never blocks the top bar */
+  #drawLayer{ position:absolute; inset:0; z-index:1; pointer-events:none; touch-action:none; }
+  #topbar,#distwrap,#drawLayer{ display:none; }
+  #hud.active #topbar{ display:flex; }
+  #hud.active #distwrap{ display:block; }
+  #hud.active #drawLayer{ display:block; }
   #drawLayer.armed{ pointer-events:auto; cursor:crosshair; }
   #rubber{ position:absolute; border:2px solid var(--gold); background:rgba(217,178,94,.10);
     box-shadow:0 0 0 1px rgba(0,0,0,.4); display:none; pointer-events:none; }
@@ -59,10 +63,10 @@
     font-size:16px; filter:drop-shadow(0 1px 2px rgba(0,0,0,.7)); }
 
   /* prompt bar */
-  #promptbar{ position:absolute; left:10px; right:10px;
+  #promptbar{ position:absolute; left:10px; right:10px; z-index:3;
     bottom:calc(12px + env(safe-area-inset-bottom)); padding:12px; pointer-events:auto;
-    display:none; transition:opacity .25s; }
-  #promptbar.open{ display:block; }
+    display:block; visibility:hidden; transition:opacity .25s; }
+  #promptbar.open{ visibility:visible; }
   #promptbar .toprow{ display:flex; gap:8px; margin-bottom:8px; }
   #promptInput{ flex:1; }
   #chips{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
@@ -74,9 +78,10 @@
   #shotStatus.ok{ color:#9fd98a; }
 
   /* settings */
-  #settings{ position:fixed; inset:0; z-index:50; display:none; align-items:center;
-    justify-content:center; background:rgba(0,0,0,.55); pointer-events:auto; }
-  #settings.open{ display:flex; }
+  #settings{ position:fixed; inset:0; z-index:5; display:flex; align-items:center;
+    justify-content:center; background:rgba(0,0,0,.55); pointer-events:none;
+    opacity:0; visibility:hidden; transition:opacity .2s; }
+  #settings.open{ opacity:1; visibility:visible; pointer-events:auto; }
   #settings .panel{ width:min(380px,92vw); padding:20px; }
   #settings h2{ font-family:Georgia,serif; font-weight:normal; font-size:17px; color:var(--gold); margin-bottom:12px; }
   #settings .field{ margin-bottom:11px; }
@@ -154,10 +159,9 @@
     </div>
     <div id="shotStatus"></div>
   </div>
-</div>
 
-<!-- ================= settings ================= -->
-<div id="settings">
+  <!-- settings lives INSIDE the dom-overlay root so it renders during AR -->
+  <div id="settings">
   <div class="panel">
     <h2>Krea settings</h2>
     <div class="field"><span class="lbl">API key (kept in memory only — never saved)</span>
@@ -172,6 +176,7 @@
     <div class="row" style="display:flex;gap:8px">
       <button class="gold" id="btnSetDone" style="flex:1">DONE</button>
     </div>
+  </div>
   </div>
 </div>
 
