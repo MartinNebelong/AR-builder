@@ -175,10 +175,11 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
 
 <div id="tray">
   <div class="knob"><label>Depth</label><input type="range" id="rDepth" min="30" max="300" value="140"></div>
+  <div class="knob"><label>Lens</label><input type="range" id="rLens" min="30" max="90" value="55"></div>
   <div class="knob"><label>Dots</label><input type="range" id="rSize" min="30" max="260" value="110"></div>
-  <button class="tbtn" id="btnClown">🎪 Clown</button>
-  <button class="tbtn" id="btnReset">Reset</button>
-  <button class="tbtn" id="btnNew">New</button>
+  <button class="tbtn" id="btnClown" title="Clown pass">🎪</button>
+  <button class="tbtn" id="btnReset" title="Reset view">⟲</button>
+  <button class="tbtn" id="btnNew" title="New original">✚</button>
 </div>
 
 <!-- settings -->
@@ -512,32 +513,22 @@ async function ensureDepth(){
   }
   throw last;
 }
+let samForce=null;   // 'wasm-fp32' once GPU output is detected as numerically broken
 async function ensureSAM(){
-  /* On WebGPU phones the full SAM ViT-B is viable (one-time ~180 MB download,
-     browser-cached) and is a different league from SlimSAM. Auto-upgrade the
-     untouched default once; any explicit Setup choice is respected. */
-  if(!S.samAuto&&S.samId==='Xenova/slimsam-50-uniform'&&navigator.gpu){
-    S.samAuto=true; S.samId='Xenova/sam-vit-base';
-    const sel=$('selSam'); if(sel) sel.value='Xenova/sam-vit-base';
-  }
-  if(sam&&sam.id===S.samId) return sam;
+  if(sam&&sam.id===S.samId&&sam.force===samForce) return sam;
   const t=await lib();
-  const tries=[{device:'webgpu',dtype:'fp16'},{device:'wasm',dtype:'fp32'},{device:'wasm',dtype:'q8'}];
+  const tries=samForce==='wasm-fp32'
+    ?[{device:'wasm',dtype:'fp32'}]
+    :[{device:'webgpu',dtype:'fp32'},{device:'wasm',dtype:'fp32'},{device:'wasm',dtype:'q8'}];
   let last;
   for(const o of tries){
     try{
       say('LOADING SEGMENTER…','busy');
       const model=await t.SamModel.from_pretrained(S.samId,{...o,progress_callback:progressCb('SEGMENTER')});
       const processor=await t.AutoProcessor.from_pretrained(S.samId);
-      sam={id:S.samId,model,processor,imgKey:null,inputs:null,embeds:null};
+      sam={id:S.samId,force:samForce,device:o.device,model,processor,imgKey:null,inputs:null,embeds:null};
       return sam;
     }catch(e){ last=e; }
-  }
-  /* full SAM too heavy for this device? fall back to SlimSAM-50 */
-  if(S.samId==='Xenova/sam-vit-base'){
-    S.samId='Xenova/slimsam-50-uniform';
-    const sel=$('selSam'); if(sel) sel.value=S.samId;
-    return ensureSAM();
   }
   throw last;
 }
@@ -570,26 +561,45 @@ async function runDepth(){
 }
 
 /* ---------- point cloud ---------- */
-const NEAR=1.0, TANV=Math.tan(THREE.MathUtils.degToRad(55/2));
-function cloudParams(){ return {range:parseInt($('rDepth').value)/100*2.2, sizeK:parseInt($('rSize').value)/100}; }
+const NEAR=1.0;
+function cloudParams(){ return {
+  ratio:1.5+(parseInt($('rDepth').value)-30)/270*8.5,           // Zfar/Znear 1.5–10
+  tanV:Math.tan(THREE.MathUtils.degToRad(parseInt($('rLens').value)/2)),
+  sizeK:parseInt($('rSize').value)/100 }; }
+/* Depth Anything predicts INVERSE depth (disparity) up to scale+shift.
+   Map it reciprocally — Z = 1/lerp(1/Zf, 1/Zn, d) — so planes stay planar
+   instead of bowing; DEPTH slider tunes the far/near ratio (the shift),
+   LENS matches the photo's field of view so lateral scale is honest. */
+function robustRange(){
+  const a=[]; const N=S.d01.length, st=Math.max(1,Math.floor(N/40000));
+  for(let i=0;i<N;i+=st) a.push(S.d01[i]);
+  a.sort((x,y)=>x-y);
+  S.dLo=a[Math.floor(a.length*.02)]; S.dHi=a[Math.floor(a.length*.98)];
+  if(S.dHi-S.dLo<1e-4){S.dLo=0;S.dHi=1;}
+}
+function zOf(d,ratio){
+  const dd=Math.min(1,Math.max(0,(d-S.dLo)/(S.dHi-S.dLo)));
+  return 1/(dd*(1/NEAR-1/(NEAR*ratio))+1/(NEAR*ratio));
+}
 function buildCloud(){
   disposeCloud();
-  const {w,h}=S.img, {range}=cloudParams();
+  const {w,h}=S.img, {ratio,tanV}=cloudParams();
+  robustRange();
   const step=Math.max(1,Math.ceil(Math.max(w,h)/MAXGRID));
   const gw=Math.floor(w/step), gh=Math.floor(h/step), n=gw*gh;
   const px=S.img.ctx.getImageData(0,0,w,h).data;
   S.pix=px;
   const pos=new Float32Array(n*3), flat=new Float32Array(n*3),
         sel=new Float32Array(n), rnd=new Float32Array(n), uv=new Float32Array(n*2);
-  const aspect=w/h, tanH=TANV*aspect;
+  const aspect=w/h, tanH=tanV*aspect;
   let k=0;
+  const zMid=Math.sqrt(NEAR*NEAR*ratio);   // geometric mean for the flat reveal plane
   for(let gy=0;gy<gh;gy++)for(let gx=0;gx<gw;gx++,k++){
     const x=Math.min(w-1,gx*step+(step>>1)), y=Math.min(h-1,gy*step+(step>>1));
-    const u=(x+.5)/w, v=(y+.5)/h, d=S.d01[y*w+x];
-    const z=NEAR+(1-d)*range, X=(u-.5)*2*tanH*z, Y=(.5-v)*2*TANV*z;
-    pos[k*3]=X; pos[k*3+1]=Y; pos[k*3+2]=-z;
-    const zf=NEAR+range*.5;
-    flat[k*3]=(u-.5)*2*tanH*zf; flat[k*3+1]=(.5-v)*2*TANV*zf; flat[k*3+2]=-zf;
+    const u=(x+.5)/w, v=(y+.5)/h;
+    const z=zOf(S.d01[y*w+x],ratio);
+    pos[k*3]=(u-.5)*2*tanH*z; pos[k*3+1]=(.5-v)*2*tanV*z; pos[k*3+2]=-z;
+    flat[k*3]=(u-.5)*2*tanH*zMid; flat[k*3+1]=(.5-v)*2*tanV*zMid; flat[k*3+2]=-zMid;
     uv[k*2]=u; uv[k*2+1]=v; rnd[k]=Math.random();
   }
   const geo=new THREE.BufferGeometry();
@@ -604,7 +614,7 @@ function buildCloud(){
   S.tex.flipY=false;   // our uv is image-space (v=0 = top); three's default flips canvas uploads
   S.tex.minFilter=THREE.LinearFilter; S.tex.magFilter=THREE.LinearFilter;
   S.tex.wrapS=S.tex.wrapT=THREE.ClampToEdgeWrapping; S.tex.generateMipmaps=false;
-  uni.uMap.value=S.tex; uni.uTan.value.set(tanH,TANV);
+  uni.uMap.value=S.tex; uni.uTan.value.set(tanH,tanV);
   const points=new THREE.Points(geo,pointMat);
   scene.add(points);
   const bs=geo.boundingSphere;
@@ -617,21 +627,24 @@ function disposeCloud(){
   if(S.cloud){scene.remove(S.cloud.points);S.cloud.geo.dispose();S.cloud=null;}
   if(S.tex){S.tex.dispose();S.tex=null;uni.uMap.value=null;}
 }
-function rebuildPositions(){ // depth slider
+function rebuildPositions(){ // depth + lens sliders
   if(!S.cloud) return;
-  const {range}=cloudParams(); const {w,h}=S.img;
-  const pos=S.cloud.geo.attributes.position, uv=S.cloud.uv, aspect=w/h, tanH=TANV*aspect;
+  const {ratio,tanV}=cloudParams(); const {w,h}=S.img;
+  const pos=S.cloud.geo.attributes.position, uv=S.cloud.uv, aspect=w/h, tanH=tanV*aspect;
   for(let k=0;k<S.cloud.n;k++){
     const u=uv[k*2],v=uv[k*2+1];
     const x=Math.min(w-1,Math.round(u*w-.5)), y=Math.min(h-1,Math.round(v*h-.5));
-    const z=NEAR+(1-S.d01[y*w+x])*range;
-    pos.array[k*3]=(u-.5)*2*tanH*z; pos.array[k*3+1]=(.5-v)*2*TANV*z; pos.array[k*3+2]=-z;
+    const z=zOf(S.d01[y*w+x],ratio);
+    pos.array[k*3]=(u-.5)*2*tanH*z; pos.array[k*3+1]=(.5-v)*2*tanV*z; pos.array[k*3+2]=-z;
   }
   pos.needsUpdate=true; S.cloud.geo.computeBoundingSphere();
+  S.cloud.tanH=tanH; uni.uTan.value.set(tanH,tanV);
+  updateDotSize();
   if(S.sel) computeSelWorld();
 }
 function updateDotSize(){ if(S.cloud) uni.uSize.value=(2*S.cloud.tanH/S.cloud.gw)*1.55*cloudParams().sizeK; }
 $('rDepth').oninput=rebuildPositions;
+$('rLens').oninput=rebuildPositions;
 $('rSize').oninput=updateDotSize;
 $('btnReset').onclick=goHome;
 $('btnNew').onclick=()=>{ $('feed').style.display='flex'; };
@@ -749,6 +762,25 @@ function morphPass(src,w,h,r,isMax){
   return out;
 }
 function closeMask(mask,w,h,r){ return morphPass(morphPass(mask,w,h,r,true),w,h,r,false); }
+/* connected-component census for glitch detection: component count, largest, total */
+function maskStats(mask,w,h){
+  const lab=new Int32Array(w*h), q=new Int32Array(w*h);
+  let n=0,max=0,total=0;
+  for(let s=0;s<w*h;s++){
+    if(!mask[s]||lab[s]) continue;
+    n++; let head=0,tail=0; q[tail++]=s; lab[s]=n; let area=0;
+    while(head<tail){
+      const p=q[head++]; area++;
+      const x=p%w,y=(p/w)|0;
+      if(x>0&&mask[p-1]&&!lab[p-1]){lab[p-1]=n;q[tail++]=p-1;}
+      if(x<w-1&&mask[p+1]&&!lab[p+1]){lab[p+1]=n;q[tail++]=p+1;}
+      if(y>0&&mask[p-w]&&!lab[p-w]){lab[p-w]=n;q[tail++]=p-w;}
+      if(y<h-1&&mask[p+w]&&!lab[p+w]){lab[p+w]=n;q[tail++]=p+w;}
+    }
+    total+=area; if(area>max)max=area;
+  }
+  return {n,max,total};
+}
 function depthTrim(mask){
   const {w,h}=S.img;
   const idxs=[]; for(let p=0;p<w*h;p++) if(mask[p]) idxs.push(p);
@@ -800,6 +832,14 @@ async function runSeg(){
       for(let y=0;y<h;y++){const my=Math.min(H-1,Math.round(y*H/h));
         for(let x=0;x<w;x++){const mx=Math.min(W-1,Math.round(x*W/w));
           if(m.data[best*H*W+my*W+mx]) union[y*w+x]=1; }}
+    }
+    /* real SAM masks are spatially smooth; a speckle signature means the GPU
+       decode produced numeric garbage — reload once in precision mode */
+    const st=maskStats(union,w,h);
+    if(st.total>0&&(st.n>40||st.max<st.total*.3)&&sam.device==='webgpu'&&!samForce){
+      samForce='wasm-fp32'; sam=null;
+      say('GPU SEGMENTER GLITCHED — SWITCHING TO PRECISION MODE…','busy');
+      segBusy=false; return runSeg();
     }
     finalizeMask(keepSeededComponents(depthTrim(closeMask(union,w,h,2)),w,h));
   }catch(err){
@@ -907,7 +947,12 @@ function selCrop(padK,maskedCutout){
 
 /* ---------- Krea API ---------- */
 function mapErr(st){return st===401?'INVALID API KEY':st===402?'API BALANCE EMPTY — TOP UP AT KREA → API BILLING'
-  :st===404?'UNKNOWN MODEL SLUG':st===429?'RATE LIMITED — WAIT A MOMENT':'KREA ERROR '+st;}
+  :st===404?'UNKNOWN MODEL SLUG':st===422?'MODEL REJECTED THE REQUEST (422)':st===429?'RATE LIMITED — WAIT A MOMENT':'KREA ERROR '+st;}
+async function kreaFail(r){
+  let d=''; try{const j=await r.json(); d=j.detail?JSON.stringify(j.detail):(j.error?.message||j.message||'');}
+  catch(_){ try{d=await r.text();}catch(__){} }
+  return new Error(mapErr(r.status)+(d?' · '+String(d).slice(0,140).toUpperCase():''));
+}
 function needKey(action){
   if(LOCAL_ORIGIN){ say('LOCAL FILE ORIGIN — KREA CALLS NEED HTTPS · PUSH TO GITHUB PAGES','warn'); }
   else if(SANDBOXED){ say('AI CALLS ARE BLOCKED IN THIS PREVIEW — HOST ON GITHUB PAGES','warn'); }
@@ -920,7 +965,7 @@ async function kreaSubmit(path,body){
   const r=await fetch(S.krea.base+path,{method:'POST',
     headers:{'Authorization':'Bearer '+S.krea.key,'Content-Type':'application/json'},
     body:JSON.stringify(body)}).catch(()=>{throw new Error(netFail());});
-  if(!r.ok) throw new Error(mapErr(r.status));
+  if(!r.ok) throw await kreaFail(r);
   return r.json();
 }
 async function kreaPoll(jobId,onTick,maxMs){
@@ -937,12 +982,18 @@ async function kreaPoll(jobId,onTick,maxMs){
 }
 async function uploadAsset(blob,name){
   const fd=new FormData(); fd.append('file',blob,name);
-  const r=await fetch(S.krea.base+'/assets',{method:'POST',headers:{'Authorization':'Bearer '+S.krea.key},body:fd});
-  if(!r.ok) throw new Error(mapErr(r.status));
+  const r=await fetch(S.krea.base+'/assets',{method:'POST',headers:{'Authorization':'Bearer '+S.krea.key},body:fd})
+    .catch(()=>{throw new Error(netFail());});
+  if(!r.ok) throw await kreaFail(r);
   const j=await r.json();
   const url=j.url||j.asset_url||j.download_url||j.asset?.url||j.result?.url||(Array.isArray(j.urls)&&j.urls[0]);
   if(!url) throw new Error('ASSET UPLOAD: NO URL IN RESPONSE');
   return url;
+}
+async function fetchResult(url,as){ // as: 'bitmap' | 'buffer'
+  const r=await fetch(url).catch(()=>{throw new Error('RESULT MADE BUT DOWNLOAD BLOCKED (CORS) — OPEN THE LINK IN THE TICKET');});
+  if(!r.ok) throw new Error('RESULT DOWNLOAD FAILED ('+r.status+') — OPEN THE LINK IN THE TICKET');
+  return as==='buffer'?r.arrayBuffer():createImageBitmap(await r.blob());
 }
 
 /* ---------- job tickets ---------- */
@@ -968,17 +1019,20 @@ $('btnClown').onclick=async()=>{
   const tk=ticket('CLOWN PASS');
   say('PAINTING CLOWN PASS — TAPS WILL BE INSTANT AFTER','busy');
   try{
+    tk.tick('UPLOADING ORIGINAL…');
+    const srcBlob=await new Promise(r=>S.img.canvas.toBlob(r,'image/jpeg',.92));
+    const srcUrl=await uploadAsset(srcBlob,'vcm-original.jpg');
     const job=await kreaSubmit('/generate/image/'+S.krea.clownModel,{
       prompt:'Convert this exact photograph into a VFX clown pass (object ID matte): repaint every distinct object and surface as one single flat solid saturated color with hard edges. No shading, no gradients, no texture, no outlines, no text. Adjacent objects must use strongly different hues; the background gets its own flat color. Keep every object boundary and the whole composition pixel-aligned with the original photo.',
-      image_urls:[S.img.dataURL]});
+      image_urls:[srcUrl]});
     const done=await kreaPoll(job.job_id,(j,s)=>tk.tick((j.status||'…').toUpperCase()+' · '+s+'S'),4*60*1000);
     const url=done.result?.urls?.[0]; if(!url) throw new Error('NO RESULT URL');
-    const bmp=await createImageBitmap(await (await fetch(url)).blob());
+    tk.done(`<a href="${url}" target="_blank" rel="noopener">PASS PNG</a>`);
+    const bmp=await fetchResult(url,'bitmap');
     const {w,h}=S.img;
     const cc=document.createElement('canvas'); cc.width=w; cc.height=h;
     const cx=cc.getContext('2d'); cx.drawImage(bmp,0,0,w,h);
     S.clown=cx.getImageData(0,0,w,h).data;
-    tk.done(`<a href="${url}" target="_blank" rel="noopener">PASS PNG</a>`);
     if(S.seed&&S.seed.points.length) clownSelect(); else idleStatus();
     say('CLOWN PASS READY — TAP ANY OBJECT · INSTANT');
   }catch(err){ console.error(err); tk.fail(String(err.message||err).toUpperCase()); say(String(err.message||err).toUpperCase(),'err'); }
@@ -996,24 +1050,25 @@ $('pGo').onclick=async()=>{
   closeSheets();
   const selSnap=S.sel; if(!selSnap) return;
   const crop=selCrop(.14,false);
-  const dataURI=crop.canvas.toDataURL('image/jpeg',.92);
   const tk=ticket('REPAINT');
   say('COPYING · REPAINT SENT TO KREA','busy');
   try{
+    tk.tick('UPLOADING CROP…');
+    const cropBlob=await new Promise(r=>crop.canvas.toBlob(r,'image/jpeg',.92));
+    const cropUrl=await uploadAsset(cropBlob,'vcm-crop.jpg');
     const job=await kreaSubmit('/generate/image/'+S.krea.imgModel,{
       prompt:`Edit this photo: make the main subject ${prompt}. Keep the exact camera angle, framing, lighting and every other part of the image unchanged.`,
-      image_urls:[dataURI]});
+      image_urls:[cropUrl]});
     const done=await kreaPoll(job.job_id,(j,s)=>tk.tick((j.status||'…').toUpperCase()+' · '+s+'S'),4*60*1000);
     const url=done.result?.urls?.[0]; if(!url) throw new Error('NO RESULT URL');
-    await pasteRepaint(url,crop,selSnap);
     tk.done(`<a href="${url}" target="_blank" rel="noopener">PNG</a>`);
+    await pasteRepaint(url,crop,selSnap);
     uni.uFlash.value=1;
     say('COPY COMPLETE — OBJECT REPAINTED');
   }catch(err){ console.error(err); tk.fail(String(err.message||err).toUpperCase()); say(String(err.message||err).toUpperCase(),'err'); }
 };
 async function pasteRepaint(url,crop,selSnap){
-  const blob=await (await fetch(url)).blob();
-  const bmp=await createImageBitmap(blob);
+  const bmp=await fetchResult(url,'bitmap');
   const rc=document.createElement('canvas'); rc.width=crop.cw; rc.height=crop.ch;
   const rctx=rc.getContext('2d');
   rctx.drawImage(bmp,0,0,crop.cw,crop.ch);
@@ -1065,7 +1120,7 @@ $('mGo').onclick=async()=>{
   }catch(err){ console.error(err); tk.fail(String(err.message||err).toUpperCase()); say(String(err.message||err).toUpperCase(),'err'); }
 };
 async function placeGLB(url,selSnap){
-  const buf=await (await fetch(url)).arrayBuffer();
+  const buf=await fetchResult(url,'buffer');
   const gltf=await new Promise((res,rej)=>new THREE.GLTFLoader().parse(buf,'',res,rej));
   const root=gltf.scene||gltf.scenes[0];
   const box=new THREE.Box3().setFromObject(root);
