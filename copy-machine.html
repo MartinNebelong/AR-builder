@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Virtual Copy Machine · VCM-01</title>
+<style>
+:root{
+  --bg:#0F1211; --panel:#171B19; --paper:#EFEDE6; --ink:#141514;
+  --beam:#7DFFB1; --beam-dim:rgba(125,255,177,.14);
+  --warn:#FFB356; --err:#FF6A5C; --mut:#8b938d;
+  --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px);
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--paper);
+  font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;overscroll-behavior:none}
+button{font:inherit;cursor:pointer;border:0;background:none;color:inherit}
+input,select{font:inherit}
+
+/* ---- faceplate ---- */
+#plate{position:fixed;left:0;right:0;top:0;z-index:30;display:flex;align-items:flex-end;gap:10px;
+  padding:calc(max(10px,var(--sat)) + 4px) 14px 8px;pointer-events:none}
+#plate h1{font-size:13px;font-weight:800;letter-spacing:.32em;text-transform:uppercase}
+#plate .no{font-family:var(--mono);font-size:9px;letter-spacing:.2em;color:var(--mut);padding-bottom:1px}
+#plate .sp{flex:1}
+#gear{pointer-events:auto;font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--mut);
+  border:1px solid #2a302c;border-radius:6px;padding:6px 10px;background:rgba(23,27,25,.85);backdrop-filter:blur(8px)}
+#gear:active{color:var(--beam);border-color:var(--beam)}
+
+/* ---- LCD status line ---- */
+#lcd{position:fixed;left:14px;right:14px;top:calc(max(10px,var(--sat)) + 34px);z-index:30;pointer-events:none;
+  font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--beam);
+  background:rgba(10,14,12,.82);border:1px solid #22312a;border-radius:6px;padding:7px 10px;
+  display:flex;gap:8px;align-items:center;backdrop-filter:blur(8px)}
+#lcd .cur{width:7px;height:12px;background:var(--beam);flex:none;display:none}
+#lcd.busy .cur{display:block;animation:blink 1s steps(1) infinite}
+#lcd.err{color:var(--err);border-color:#4a2622}
+#lcd.warn{color:var(--warn);border-color:#4a3a22}
+@keyframes blink{50%{opacity:0}}
+
+canvas.webgl{position:fixed;inset:0;touch-action:none;display:block}
+
+/* ---- feed screen (the copier glass) ---- */
+#feed{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;padding:24px;
+  background:
+    radial-gradient(120% 90% at 50% 0%,rgba(125,255,177,.05),transparent 55%),
+    var(--bg)}
+#glass{width:min(440px,100%);border:1px dashed #3a423d;border-radius:14px;padding:34px 22px 26px;text-align:center;
+  background:linear-gradient(180deg,rgba(23,27,25,.9),rgba(15,18,17,.9));position:relative;overflow:hidden}
+#glass.drag{border-color:var(--beam);background:var(--beam-dim)}
+#glass .eyebrow{font-family:var(--mono);font-size:9px;letter-spacing:.3em;color:var(--mut);text-transform:uppercase}
+#glass h2{margin:10px 0 6px;font-size:20px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+#glass p{font-size:12.5px;line-height:1.55;color:var(--mut);max-width:34ch;margin:0 auto 20px}
+#glass .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.pbtn{background:var(--paper);color:var(--ink);font-weight:700;font-size:12px;letter-spacing:.1em;text-transform:uppercase;
+  border-radius:8px;padding:13px 18px;min-width:132px}
+.pbtn:active{transform:translateY(1px)}
+.pbtn.ghost{background:transparent;color:var(--paper);border:1px solid #3a423d}
+#glass .fine{margin-top:18px;font-family:var(--mono);font-size:9px;letter-spacing:.08em;color:#5c645f}
+#glass .lamp{position:absolute;left:-10%;right:-10%;height:3px;top:0;background:linear-gradient(90deg,transparent,var(--beam),transparent);
+  opacity:.35;animation:idle 4.5s ease-in-out infinite}
+@keyframes idle{0%,100%{transform:translateY(6px)}50%{transform:translateY(64px)}}
+
+/* ---- scan overlay ---- */
+#scan{position:fixed;inset:0;z-index:22;display:none;align-items:center;justify-content:center;background:rgba(10,13,12,.94);padding:24px}
+#scan.on{display:flex}
+#scanBox{position:relative;max-width:min(440px,92vw);border-radius:10px;overflow:hidden;border:1px solid #2a302c}
+#scanBox img{display:block;width:100%;filter:saturate(.9)}
+#beam{position:absolute;left:0;right:0;height:22%;top:-25%;pointer-events:none;
+  background:linear-gradient(180deg,transparent,rgba(125,255,177,.28) 55%,var(--beam) 84%,transparent 86%);
+  mix-blend-mode:screen}
+#scanTxt{position:absolute;left:10px;bottom:10px;font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  color:var(--beam);text-transform:uppercase;background:rgba(10,14,12,.75);padding:5px 8px;border-radius:5px}
+
+/* ---- selection chips ---- */
+#chips{position:fixed;left:0;right:0;bottom:calc(max(12px,var(--sab)) + 66px);z-index:26;display:none;
+  justify-content:center;gap:8px;padding:0 14px;flex-wrap:wrap}
+#chips.on{display:flex}
+.chip{background:var(--paper);color:var(--ink);font-weight:800;font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  border-radius:999px;padding:12px 16px;box-shadow:0 4px 18px rgba(0,0,0,.45)}
+.chip.alt{background:#232824;color:var(--paper);border:1px solid #3a423d;font-weight:600}
+.chip:active{transform:translateY(1px)}
+
+/* ---- bottom tray ---- */
+#tray{position:fixed;left:0;right:0;bottom:0;z-index:24;display:none;gap:14px;align-items:center;
+  padding:10px 16px calc(max(12px,var(--sab)) + 8px);
+  background:linear-gradient(180deg,transparent,rgba(10,13,12,.88) 34%)}
+#tray.on{display:flex}
+.knob{flex:1;min-width:0}
+.knob label{display:block;font-family:var(--mono);font-size:8.5px;letter-spacing:.22em;color:var(--mut);
+  text-transform:uppercase;margin-bottom:5px}
+input[type=range]{-webkit-appearance:none;width:100%;height:22px;background:transparent}
+input[type=range]::-webkit-slider-runnable-track{height:2px;background:#3a423d;border-radius:2px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;
+  background:var(--beam);margin-top:-7px;box-shadow:0 0 0 4px rgba(125,255,177,.12)}
+input[type=range]::-moz-range-track{height:2px;background:#3a423d}
+input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radius:50%;background:var(--beam)}
+.tbtn{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);
+  border:1px solid #2a302c;border-radius:7px;padding:9px 11px;background:rgba(23,27,25,.85);white-space:nowrap}
+.tbtn:active{color:var(--beam);border-color:var(--beam)}
+
+/* ---- job tickets ---- */
+#jobs{position:fixed;left:12px;bottom:calc(max(12px,var(--sab)) + 124px);z-index:25;display:flex;
+  flex-direction:column-reverse;gap:6px;max-width:min(300px,72vw)}
+.tik{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+  background:rgba(15,19,17,.92);border:1px solid #2a302c;border-left:3px solid var(--mut);
+  border-radius:6px;padding:8px 10px;line-height:1.7;animation:tin .25s ease}
+@keyframes tin{from{opacity:0;transform:translateY(8px)}}
+.tik.run{border-left-color:var(--beam)}
+.tik.run .st{color:var(--beam)}
+.tik.done{border-left-color:var(--beam)}
+.tik.fail{border-left-color:var(--err)}
+.tik.fail .st{color:var(--err)}
+.tik a{color:var(--beam);text-decoration:none;border-bottom:1px dotted var(--beam);margin-right:10px}
+.tik .x{float:right;color:#5c645f;padding:0 0 0 8px}
+
+/* ---- sheets ---- */
+.sheet{position:fixed;inset:0;z-index:40;display:none;align-items:flex-end;justify-content:center;
+  background:rgba(6,9,8,.6);backdrop-filter:blur(3px)}
+.sheet.on{display:flex}
+.card{width:min(460px,100%);background:var(--panel);border:1px solid #2a302c;border-bottom:0;
+  border-radius:16px 16px 0 0;padding:18px 18px calc(max(16px,var(--sab)) + 14px);animation:up .22s ease}
+@keyframes up{from{transform:translateY(24px);opacity:0}}
+.card h3{font-size:12px;font-weight:800;letter-spacing:.24em;text-transform:uppercase;margin-bottom:2px}
+.card .sub{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--mut);margin-bottom:14px}
+.f{margin-bottom:12px}
+.f label{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.2em;color:var(--mut);
+  text-transform:uppercase;margin-bottom:6px}
+.f input,.f select{width:100%;background:#0e1210;border:1px solid #2a302c;border-radius:8px;color:var(--paper);
+  padding:11px 12px;font-size:14px;outline:none;-webkit-appearance:none;appearance:none}
+.f select{background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);
+  background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%;background-size:5px 5px;background-repeat:no-repeat}
+.f .cus{margin-top:7px}
+.f input:focus,.f select:focus{border-color:var(--beam)}
+.f .hint{font-family:var(--mono);font-size:8.5px;color:#5c645f;margin-top:5px;letter-spacing:.04em}
+.card .row{display:flex;gap:10px;margin-top:16px}
+.card .row .pbtn{flex:1;min-width:0;padding:14px 10px}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<header id="plate">
+  <h1>Virtual Copy Machine</h1><span class="no">VCM-01</span><span class="sp"></span>
+  <button id="gear">⚙ SETUP</button>
+</header>
+
+<div id="lcd"><span class="cur"></span><span id="lcdTxt">READY — FEED AN ORIGINAL</span></div>
+
+<div id="feed">
+  <div id="glass">
+    <div class="lamp"></div>
+    <div class="eyebrow">Place original on glass</div>
+    <h2>Feed an image</h2>
+    <p>The machine scans depth on-device, lifts the photo into a point cloud you can fly through, then lets you isolate any object to repaint it or pull a real 3D model from it.</p>
+    <div class="row">
+      <button class="pbtn" id="btnPick">Choose image</button>
+      <button class="pbtn ghost" id="btnCam">Use camera</button>
+    </div>
+    <div class="fine">DEPTH + SEGMENTATION RUN IN YOUR BROWSER · FIRST SCAN DOWNLOADS ~50 MB OF MODELS</div>
+  </div>
+</div>
+
+<div id="scan"><div id="scanBox"><img id="scanImg" alt=""><div id="beam"></div><div id="scanTxt">SCANNING</div></div></div>
+
+<div id="chips">
+  <button class="chip" id="chipPaint">✎ Repaint</button>
+  <button class="chip" id="chipModel">⬚ Make 3D</button>
+  <button class="chip alt" id="chipUndo">⌫ Undo tap</button>
+  <button class="chip alt" id="chipClear">✕ Clear</button>
+</div>
+
+<div id="jobs"></div>
+
+<div id="tray">
+  <div class="knob"><label>Depth</label><input type="range" id="rDepth" min="30" max="300" value="140"></div>
+  <div class="knob"><label>Dots</label><input type="range" id="rSize" min="30" max="260" value="110"></div>
+  <button class="tbtn" id="btnClown">🎪 Clown</button>
+  <button class="tbtn" id="btnReset">Reset</button>
+  <button class="tbtn" id="btnNew">New</button>
+</div>
+
+<!-- settings -->
+<div class="sheet" id="shSet"><div class="card">
+  <h3>Setup</h3><div class="sub">KREA API · key stays in memory only, never saved</div>
+  <div class="f"><label>Krea API key</label><input id="sKey" type="password" placeholder="krea_…" autocomplete="off">
+    <div class="hint">krea.ai → settings → API tokens. API balance is billed separately from the app plan.</div></div>
+  <div class="f"><label>API base</label><input id="sBase" value="https://api.krea.ai"></div>
+  <div class="f"><label>Repaint model</label>
+    <select id="selImg">
+      <option value="google/nano-banana-2" selected>Nano Banana 2 · cheap edits</option>
+      <option value="google/nano-banana">Nano Banana · versatile</option>
+      <option value="google/nano-banana-pro">Nano Banana Pro · best quality</option>
+      <option value="bfl/flux-1-kontext-dev">Flux Kontext · structure-faithful</option>
+      <option value="bytedance/seededit">SeedEdit · precise edits</option>
+      <option value="bytedance/seedream-4">Seedream 4 · photoreal</option>
+      <option value="openai/gpt-image-2">ChatGPT Image 2 · smart edits</option>
+      <option value="__c">Custom slug…</option>
+    </select><input id="cusImg" class="cus" hidden placeholder="vendor/model" autocomplete="off"></div>
+  <div class="f"><label>Clown pass model</label>
+    <select id="selClown">
+      <option value="bfl/flux-1-kontext-dev" selected>Flux Kontext · holds boundaries best</option>
+      <option value="google/nano-banana-2">Nano Banana 2 · cheapest</option>
+      <option value="google/nano-banana-pro">Nano Banana Pro · smartest</option>
+      <option value="bytedance/seededit">SeedEdit</option>
+      <option value="__c">Custom slug…</option>
+    </select><input id="cusClown" class="cus" hidden placeholder="vendor/model" autocomplete="off"></div>
+  <div class="f"><label>3D model</label>
+    <select id="sel3d">
+      <option value="microsoft/trellis-2" selected>TRELLIS 2 · native 3D</option>
+      <option value="microsoft/trellis">TRELLIS</option>
+      <option value="tencent/hunyuan3d-3.1-pro">Hunyuan3D 3.1 Pro · PBR</option>
+      <option value="tencent/hunyuan3d-2.1">Hunyuan3D 2.1</option>
+      <option value="tripo/tripo">Tripo</option>
+      <option value="__c">Custom slug…</option>
+    </select><input id="cus3d" class="cus" hidden placeholder="vendor/model" autocomplete="off"></div>
+  <div class="f"><label>Segmenter (on-device)</label>
+    <select id="selSam">
+      <option value="Xenova/slimsam-50-uniform" selected>SlimSAM-50 · balanced</option>
+      <option value="Xenova/slimsam-77-uniform">SlimSAM-77 · fastest, roughest</option>
+      <option value="Xenova/sam-vit-base">SAM ViT-B · best masks · ~360 MB</option>
+      <option value="__c">Custom repo…</option>
+    </select><input id="cusSam" class="cus" hidden placeholder="user/repo" autocomplete="off"></div>
+  <div class="row"><button class="pbtn ghost" id="sClose">Close</button><button class="pbtn" id="sSave">Done</button></div>
+</div></div>
+
+<!-- repaint -->
+<div class="sheet" id="shPaint"><div class="card">
+  <h3>Repaint object</h3><div class="sub" id="paintSub">SELECTION → NANO BANANA 2 → PASTED BACK INTO THE CLOUD</div>
+  <div class="f"><label>Make it…</label><input id="pPrompt" placeholder="e.g. carved from jade · made of LEGO · rusted bronze" autocomplete="off"></div>
+  <div class="row"><button class="pbtn ghost" data-close>Cancel</button><button class="pbtn" id="pGo">Copy</button></div>
+</div></div>
+
+<!-- make 3d -->
+<div class="sheet" id="shModel"><div class="card">
+  <h3>Make it real 3D</h3><div class="sub" id="modelSub">CUTOUT → TRELLIS 2 → GLB DROPPED INTO THE SCENE</div>
+  <div class="f"><label>Notes for the model (optional)</label><input id="mPrompt" placeholder="e.g. a ceramic vase, clean topology" autocomplete="off"></div>
+  <div class="row"><button class="pbtn ghost" data-close>Cancel</button><button class="pbtn" id="mGo">Copy</button></div>
+</div></div>
+
+<input type="file" id="fPick" accept="image/*" hidden>
+<input type="file" id="fCam" accept="image/*" capture="environment" hidden>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+<script type="module" id="main">
+/* ================= VIRTUAL COPY MACHINE ================= */
+const $=id=>document.getElementById(id);
+const REDUCED=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SANDBOXED=/claudeusercontent|claude\.ai/.test(location.hostname);
+const LOCAL_ORIGIN=!/^https?:$/.test(location.protocol);   // content:// · file:// — Krea calls will die here
+const MAXSIDE=1024, MAXGRID=340;
+
+/* ---------- LCD ---------- */
+const lcd=$('lcd'),lcdTxt=$('lcdTxt');
+let lcdTimer=null;
+function say(msg,mode){ lcdTxt.textContent=msg;
+  lcd.className=(mode==='busy'?'busy':mode==='err'?'err':mode==='warn'?'warn':'');
+  clearTimeout(lcdTimer);
+  if(mode==='err'||mode==='warn') lcdTimer=setTimeout(()=>{ if(S.cloud) idleStatus(); },6000);
+}
+function idleStatus(){ say(S.sel?`ISOLATED · ${S.sel.indices.length.toLocaleString()} PTS — TAP TO GROW · HOLD TO CARVE · ✕ WHEN DONE`
+  :S.clown?'CLOWN PASS ACTIVE — TAPS ISOLATE INSTANTLY':'CLOUD READY — DRAG TO FLY · TAP AN OBJECT TO ISOLATE'); }
+
+/* ---------- state ---------- */
+const S={
+  img:null,            // {canvas,ctx,w,h,dataURL}
+  d01:null,            // Float32Array w*h  (1 = near)
+  cloud:null,          // {points,geo,n,uv:Float32Array,gw,gh,center,radius}
+  sel:null,            // {mask:Uint8Array(w*h), indices, bbox:{x0,y0,x1,y1}, centroid:V3, size}
+  seed:null,           // {points:[[u,v],…], labels:[1|0,…]}  accumulated prompts
+  clown:null,          // Uint8ClampedArray RGBA w*h — flat-color object ID pass from Krea
+  pix:null,            // Uint8ClampedArray RGBA w*h — working image pixels (cached)
+  tex:null,            // THREE.CanvasTexture of the working image, projected onto the dots
+  samId:'Xenova/slimsam-50-uniform',
+  meshes:[],           // placed GLBs
+  krea:{key:'',base:'https://api.krea.ai',imgModel:'google/nano-banana-2',clownModel:'bfl/flux-1-kontext-dev',model3d:'microsoft/trellis-2'},
+  jobs:0, pendingAction:null,
+};
+
+/* ---------- three ---------- */
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.outputEncoding=THREE.sRGBEncoding;
+renderer.domElement.classList.add('webgl');
+document.body.appendChild(renderer.domElement);
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.05,200);
+scene.add(new THREE.HemisphereLight(0xdfe8e2,0x20241f,.9));
+const sun=new THREE.DirectionalLight(0xffffff,.8); sun.position.set(2,4,3); scene.add(sun);
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);updateProjK();});
+
+/* ---------- point shader ---------- */
+const uni={uSize:{value:.02},uProjK:{value:1},uReveal:{value:REDUCED?1:0},uTime:{value:0},uHasSel:{value:0},uFlash:{value:0},
+  uMap:{value:null},uTan:{value:new THREE.Vector2(1,1)}};
+function updateProjK(){ const s=new THREE.Vector2(); renderer.getDrawingBufferSize(s);
+  uni.uProjK.value=s.y/(2*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))); }
+const pointMat=new THREE.ShaderMaterial({uniforms:uni,depthWrite:true,
+vertexShader:`
+  attribute vec3 aFlat; attribute vec2 aUv; attribute float aSel; attribute float aRnd;
+  uniform float uSize,uProjK,uReveal;
+  uniform vec2 uTan;
+  varying vec2 vUv; varying vec2 vFoot; varying float vSel;
+  void main(){
+    float r=clamp(uReveal*1.45-aRnd*0.45,0.,1.); r=r*r*(3.-2.*r);
+    vec3 p=mix(aFlat,position,r);
+    vUv=aUv; vSel=aSel;
+    /* sprite world size grows with the point's LOCAL depth, matching the
+       perspective grid spacing -> constant overlap AND constant uv footprint
+       (exactly uSize x the uv gap to the neighbouring dot) everywhere */
+    float zc=max(-position.z,.001);
+    float ws=uSize*zc;
+    vFoot=vec2(ws/(2.*uTan.x*zc), ws/(2.*uTan.y*zc));
+    vec4 mv=modelViewMatrix*vec4(p,1.);
+    gl_PointSize=clamp(ws*uProjK/max(-mv.z,.001),1.0,64.0)*(0.55+0.45*r);
+    gl_Position=projectionMatrix*mv;
+  }`,
+fragmentShader:`
+  varying vec2 vUv; varying vec2 vFoot; varying float vSel;
+  uniform sampler2D uMap;
+  uniform float uHasSel,uTime,uFlash;
+  void main(){
+    vec2 c=gl_PointCoord-vec2(.5); if(dot(c,c)>.25) discard;
+    /* project the original photo onto the sprite: continuous uv across
+       neighbouring dots, so overlaps agree instead of fighting */
+    vec2 uv=clamp(vUv+c*vFoot,0.,1.);
+    vec3 col=texture2D(uMap,uv).rgb;
+    if(uHasSel>.5){
+      if(vSel>1.5) discard;
+      else if(vSel>.5){
+        float pulse=.5+.5*sin(uTime*5.0);
+        col=mix(col,vec3(.49,1.,.69),.16+.10*pulse);
+      } else col=mix(col*.35,vec3(.09,.11,.10),.3);
+    }
+    col=mix(col,vec3(.49,1.,.69),uFlash*step(.5,vSel));
+    gl_FragColor=vec4(col,1.);
+  }`});
+
+/* ---------- orbit controls (Luma-style) ---------- */
+const ctrl={target:new THREE.Vector3(0,0,-3),theta:0,phi:Math.PI/2,radius:3,
+  vTheta:0,vPhi:0,min:0.3,max:30,home:null,bounds:null,anim:null};
+function applyCam(){
+  ctrl.phi=Math.min(Math.PI-.06,Math.max(.06,ctrl.phi));
+  ctrl.radius=Math.min(ctrl.max,Math.max(ctrl.min,ctrl.radius));
+  if(ctrl.bounds) ctrl.target.clamp(ctrl.bounds.min,ctrl.bounds.max);
+  const sp=Math.sin(ctrl.phi);
+  camera.position.set(
+    ctrl.target.x+ctrl.radius*sp*Math.sin(ctrl.theta),
+    ctrl.target.y+ctrl.radius*Math.cos(ctrl.phi),
+    ctrl.target.z+ctrl.radius*sp*Math.cos(ctrl.theta));
+  camera.lookAt(ctrl.target);
+}
+function setHome(center,radius){
+  const off=new THREE.Vector3().sub(center); // origin - center
+  const r=off.length();
+  ctrl.target.copy(center); ctrl.radius=r;
+  ctrl.phi=Math.acos(THREE.MathUtils.clamp(off.y/r,-1,1));
+  ctrl.theta=Math.atan2(off.x,off.z);
+  ctrl.min=r*0.18; ctrl.max=r*7;
+  const pad=radius*1.6;
+  ctrl.bounds=new THREE.Box3(center.clone().subScalar(pad),center.clone().addScalar(pad));
+  ctrl.home={target:center.clone(),theta:ctrl.theta,phi:ctrl.phi,radius:r};
+  applyCam();
+}
+function goHome(){ const h=ctrl.home; if(!h) return;
+  if(REDUCED){ctrl.target.copy(h.target);ctrl.theta=h.theta;ctrl.phi=h.phi;ctrl.radius=h.radius;applyCam();return;}
+  const a={t:0,f:{target:ctrl.target.clone(),theta:ctrl.theta,phi:ctrl.phi,radius:ctrl.radius}};
+  ctrl.anim=a;
+}
+/* pointer handling */
+const el=renderer.domElement;
+const P=new Map(); let pinch=null,downInfo=null,lastTap=0;
+el.addEventListener('contextmenu',e=>e.preventDefault());
+el.addEventListener('pointerdown',e=>{
+  el.setPointerCapture(e.pointerId);
+  P.set(e.pointerId,{x:e.clientX,y:e.clientY,b:e.button,sh:e.shiftKey});
+  ctrl.vTheta=ctrl.vPhi=0; ctrl.anim=null;
+  if(P.size===1) downInfo={x:e.clientX,y:e.clientY,t:performance.now(),moved:0};
+  if(P.size===2){ const a=[...P.values()]; pinch={d:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y),cx:(a[0].x+a[1].x)/2,cy:(a[0].y+a[1].y)/2}; downInfo=null; }
+});
+el.addEventListener('pointermove',e=>{
+  const p=P.get(e.pointerId); if(!p) return;
+  const dx=e.clientX-p.x, dy=e.clientY-p.y; p.x=e.clientX; p.y=e.clientY;
+  if(downInfo) downInfo.moved+=Math.abs(dx)+Math.abs(dy);
+  if(P.size===2&&pinch){
+    const a=[...P.values()];
+    const d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y), cx=(a[0].x+a[1].x)/2, cy=(a[0].y+a[1].y)/2;
+    ctrl.radius*=THREE.MathUtils.clamp(pinch.d/Math.max(d,1),.9,1.1);
+    panBy(cx-pinch.cx,cy-pinch.cy);
+    pinch={d,cx,cy}; applyCam(); return;
+  }
+  if(P.size===1){
+    if(p.b===2||p.sh){ panBy(dx,dy); }
+    else{ ctrl.vTheta=-dx*.0052; ctrl.vPhi=-dy*.0052; ctrl.theta+=ctrl.vTheta; ctrl.phi+=ctrl.vPhi; }
+    applyCam();
+  }
+});
+function panBy(dx,dy){
+  const wpp=2*ctrl.radius*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))/innerHeight;
+  const right=new THREE.Vector3().setFromMatrixColumn(camera.matrix,0);
+  const up=new THREE.Vector3().setFromMatrixColumn(camera.matrix,1);
+  ctrl.target.addScaledVector(right,-dx*wpp).addScaledVector(up,dy*wpp);
+}
+function endPointer(e){
+  const wasSingle=P.size===1;
+  P.delete(e.pointerId); if(P.size<2) pinch=null;
+  if(wasSingle&&downInfo){
+    const dt=performance.now()-downInfo.t;
+    if(dt<260&&downInfo.moved<9){
+      const now=performance.now();
+      if(now-lastTap<320){ goHome(); lastTap=0; }
+      else{ lastTap=now; tapAt(downInfo.x,downInfo.y,false); }
+    }else if(dt>=450&&downInfo.moved<9&&S.sel){
+      tapAt(downInfo.x,downInfo.y,true);   // hold = carve away
+    }
+    downInfo=null;
+  }
+}
+el.addEventListener('pointerup',endPointer);
+el.addEventListener('pointercancel',endPointer);
+el.addEventListener('wheel',e=>{e.preventDefault();ctrl.radius*=Math.exp(e.deltaY*.001);applyCam();},{passive:false});
+
+/* ---------- main loop ---------- */
+const clock=new THREE.Clock();
+renderer.setAnimationLoop(()=>{
+  const dt=Math.min(clock.getDelta(),.05);
+  uni.uTime.value+=dt;
+  if(uni.uReveal.value<1&&S.cloud) uni.uReveal.value=Math.min(1,uni.uReveal.value+dt*.8);
+  if(uni.uFlash.value>0) uni.uFlash.value=Math.max(0,uni.uFlash.value-dt*2.2);
+  if(P.size===0&&(Math.abs(ctrl.vTheta)>1e-4||Math.abs(ctrl.vPhi)>1e-4)){
+    ctrl.theta+=ctrl.vTheta; ctrl.phi+=ctrl.vPhi;
+    ctrl.vTheta*=.92; ctrl.vPhi*=.92; applyCam();
+  }
+  if(ctrl.anim){
+    const a=ctrl.anim,h=ctrl.home; a.t=Math.min(1,a.t+dt*2.2);
+    const k=a.t*a.t*(3-2*a.t);
+    ctrl.target.lerpVectors(a.f.target,h.target,k);
+    ctrl.theta=THREE.MathUtils.lerp(a.f.theta,h.theta,k);
+    ctrl.phi=THREE.MathUtils.lerp(a.f.phi,h.phi,k);
+    ctrl.radius=THREE.MathUtils.lerp(a.f.radius,h.radius,k);
+    applyCam(); if(a.t>=1) ctrl.anim=null;
+  }
+  renderer.render(scene,camera);
+});
+
+/* ---------- feed an image ---------- */
+$('btnPick').onclick=()=>$('fPick').click();
+$('btnCam').onclick=()=>$('fCam').click();
+$('fPick').onchange=e=>{if(e.target.files[0])feed(e.target.files[0]);e.target.value='';};
+$('fCam').onchange=e=>{if(e.target.files[0])feed(e.target.files[0]);e.target.value='';};
+const glass=$('glass');
+addEventListener('dragover',e=>{e.preventDefault();glass.classList.add('drag');});
+addEventListener('dragleave',()=>glass.classList.remove('drag'));
+addEventListener('drop',e=>{e.preventDefault();glass.classList.remove('drag');
+  const f=[...e.dataTransfer.files].find(f=>f.type.startsWith('image/')); if(f)feed(f);});
+addEventListener('paste',e=>{const f=[...(e.clipboardData?.items||[])].find(i=>i.type.startsWith('image/')); if(f)feed(f.getAsFile());});
+
+async function feed(file){
+  try{
+    say('LOADING ORIGINAL…','busy');
+    const url=URL.createObjectURL(file);
+    const im=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=url;});
+    const sc=Math.min(1,MAXSIDE/Math.max(im.naturalWidth,im.naturalHeight));
+    const w=Math.max(2,Math.round(im.naturalWidth*sc)), h=Math.max(2,Math.round(im.naturalHeight*sc));
+    const c=document.createElement('canvas'); c.width=w; c.height=h;
+    const ctx=c.getContext('2d',{willReadFrequently:true});
+    ctx.drawImage(im,0,0,w,h); URL.revokeObjectURL(url);
+    S.img={canvas:c,ctx,w,h,dataURL:c.toDataURL('image/jpeg',.92)};
+    S.clown=null;
+    clearAll(true);
+    $('feed').style.display='none';
+    $('scanImg').src=S.img.dataURL; $('scan').classList.add('on');
+    startBeam();
+    await runDepth();
+  }catch(err){ console.error(err); say('COULD NOT READ THAT IMAGE — TRY ANOTHER','err'); $('scan').classList.remove('on'); if(!S.cloud)$('feed').style.display='flex'; }
+}
+let beamRAF=0;
+function startBeam(){ const b=$('beam'); const t0=performance.now();
+  cancelAnimationFrame(beamRAF);
+  const step=t=>{ const k=((t-t0)/1900)%1; b.style.top=(k*125-25)+'%'; beamRAF=requestAnimationFrame(step); };
+  if(!REDUCED) beamRAF=requestAnimationFrame(step);
+}
+function stopScan(){ cancelAnimationFrame(beamRAF); $('scan').classList.remove('on'); }
+
+/* ---------- on-device ML (transformers.js) ---------- */
+let TF=null,depthPipe=null,sam=null;
+async function lib(){
+  if(TF) return TF;
+  say('LOADING ML RUNTIME…','busy');
+  TF=await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.1/dist/transformers.min.js');
+  TF.env.allowLocalModels=false;
+  return TF;
+}
+function progressCb(tag){ return p=>{ if(p.status==='progress'&&p.total){
+  const msg=`${tag} · ${Math.round(p.progress||((p.loaded/p.total)*100))}%`;
+  if($('scan').classList.contains('on')) $('scanTxt').textContent=msg; else say(msg,'busy');
+}};}
+async function ensureDepth(){
+  if(depthPipe) return depthPipe;
+  const t=await lib();
+  const tries=[{device:'webgpu',dtype:'fp16'},{device:'wasm',dtype:'q8'}];
+  let last;
+  for(const o of tries){
+    try{
+      depthPipe=await t.pipeline('depth-estimation','onnx-community/depth-anything-v2-small',
+        {...o,progress_callback:progressCb('DEPTH MODEL')});
+      return depthPipe;
+    }catch(e){ last=e; }
+  }
+  throw last;
+}
+async function ensureSAM(){
+  if(sam&&sam.id===S.samId) return sam;
+  const t=await lib();
+  const tries=[{device:'webgpu',dtype:'fp16'},{device:'wasm',dtype:'fp32'},{device:'wasm',dtype:'q8'}];
+  let last;
+  for(const o of tries){
+    try{
+      say('LOADING SEGMENTER…','busy');
+      const model=await t.SamModel.from_pretrained(S.samId,{...o,progress_callback:progressCb('SEGMENTER')});
+      const processor=await t.AutoProcessor.from_pretrained(S.samId);
+      sam={id:S.samId,model,processor,imgKey:null,inputs:null,embeds:null};
+      return sam;
+    }catch(e){ last=e; }
+  }
+  throw last;
+}
+
+async function runDepth(){
+  try{
+    say('SCANNING DEPTH ON DEVICE…','busy');
+    $('scanTxt').textContent='SCANNING';
+    const t=await lib(); await ensureDepth();
+    $('scanTxt').textContent='ESTIMATING DEPTH';
+    const raw=await t.RawImage.read(S.img.dataURL);
+    const out=await depthPipe(raw);
+    const dm=out.depth, dw=dm.width, dh=dm.height, ch=dm.channels||1;
+    const {w,h}=S.img; const d01=new Float32Array(w*h);
+    let mn=255,mx=0;
+    for(let i=0;i<dm.data.length;i+=ch){const v=dm.data[i]; if(v<mn)mn=v; if(v>mx)mx=v;}
+    const rg=Math.max(1,mx-mn);
+    for(let y=0;y<h;y++){const sy=Math.min(dh-1,Math.round(y*dh/h));
+      for(let x=0;x<w;x++){const sx=Math.min(dw-1,Math.round(x*dw/w));
+        d01[y*w+x]=(dm.data[(sy*dw+sx)*ch]-mn)/rg; }}   // 1 = near
+    S.d01=d01;
+    stopScan();
+    buildCloud();
+    say('COPY LIFTED — DRAG TO FLY · TAP AN OBJECT TO ISOLATE');
+  }catch(err){
+    console.error(err); stopScan();
+    say(SANDBOXED?'THIS PREVIEW BLOCKS MODEL DOWNLOADS — OPEN ON GITHUB PAGES':'DEPTH MODEL FAILED TO LOAD — CHECK CONNECTION','err');
+    if(!S.cloud)$('feed').style.display='flex';
+  }
+}
+
+/* ---------- point cloud ---------- */
+const NEAR=1.0, TANV=Math.tan(THREE.MathUtils.degToRad(55/2));
+function cloudParams(){ return {range:parseInt($('rDepth').value)/100*2.2, sizeK:parseInt($('rSize').value)/100}; }
+function buildCloud(){
+  disposeCloud();
+  const {w,h}=S.img, {range}=cloudParams();
+  const step=Math.max(1,Math.ceil(Math.max(w,h)/MAXGRID));
+  const gw=Math.floor(w/step), gh=Math.floor(h/step), n=gw*gh;
+  const px=S.img.ctx.getImageData(0,0,w,h).data;
+  S.pix=px;
+  const pos=new Float32Array(n*3), flat=new Float32Array(n*3),
+        sel=new Float32Array(n), rnd=new Float32Array(n), uv=new Float32Array(n*2);
+  const aspect=w/h, tanH=TANV*aspect;
+  let k=0;
+  for(let gy=0;gy<gh;gy++)for(let gx=0;gx<gw;gx++,k++){
+    const x=Math.min(w-1,gx*step+(step>>1)), y=Math.min(h-1,gy*step+(step>>1));
+    const u=(x+.5)/w, v=(y+.5)/h, d=S.d01[y*w+x];
+    const z=NEAR+(1-d)*range, X=(u-.5)*2*tanH*z, Y=(.5-v)*2*TANV*z;
+    pos[k*3]=X; pos[k*3+1]=Y; pos[k*3+2]=-z;
+    const zf=NEAR+range*.5;
+    flat[k*3]=(u-.5)*2*tanH*zf; flat[k*3+1]=(.5-v)*2*TANV*zf; flat[k*3+2]=-zf;
+    uv[k*2]=u; uv[k*2+1]=v; rnd[k]=Math.random();
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  geo.setAttribute('aFlat',new THREE.BufferAttribute(flat,3));
+  geo.setAttribute('aUv',new THREE.BufferAttribute(uv,2));
+  geo.setAttribute('aSel',new THREE.BufferAttribute(sel,1));
+  geo.setAttribute('aRnd',new THREE.BufferAttribute(rnd,1));
+  geo.computeBoundingSphere();
+  if(S.tex) S.tex.dispose();
+  S.tex=new THREE.CanvasTexture(S.img.canvas);
+  S.tex.minFilter=THREE.LinearFilter; S.tex.magFilter=THREE.LinearFilter;
+  S.tex.wrapS=S.tex.wrapT=THREE.ClampToEdgeWrapping; S.tex.generateMipmaps=false;
+  uni.uMap.value=S.tex; uni.uTan.value.set(tanH,TANV);
+  const points=new THREE.Points(geo,pointMat);
+  scene.add(points);
+  const bs=geo.boundingSphere;
+  S.cloud={points,geo,n,uv,gw,gh,step,tanH,center:bs.center.clone(),radius:bs.radius};
+  uni.uReveal.value=REDUCED?1:0; updateDotSize(); updateProjK();
+  setHome(bs.center,bs.radius);
+  $('tray').classList.add('on');
+}
+function disposeCloud(){
+  if(S.cloud){scene.remove(S.cloud.points);S.cloud.geo.dispose();S.cloud=null;}
+  if(S.tex){S.tex.dispose();S.tex=null;uni.uMap.value=null;}
+}
+function rebuildPositions(){ // depth slider
+  if(!S.cloud) return;
+  const {range}=cloudParams(); const {w,h}=S.img;
+  const pos=S.cloud.geo.attributes.position, uv=S.cloud.uv, aspect=w/h, tanH=TANV*aspect;
+  for(let k=0;k<S.cloud.n;k++){
+    const u=uv[k*2],v=uv[k*2+1];
+    const x=Math.min(w-1,Math.round(u*w-.5)), y=Math.min(h-1,Math.round(v*h-.5));
+    const z=NEAR+(1-S.d01[y*w+x])*range;
+    pos.array[k*3]=(u-.5)*2*tanH*z; pos.array[k*3+1]=(.5-v)*2*TANV*z; pos.array[k*3+2]=-z;
+  }
+  pos.needsUpdate=true; S.cloud.geo.computeBoundingSphere();
+  if(S.sel) computeSelWorld();
+}
+function updateDotSize(){ if(S.cloud) uni.uSize.value=(2*S.cloud.tanH/S.cloud.gw)*1.55*cloudParams().sizeK; }
+$('rDepth').oninput=rebuildPositions;
+$('rSize').oninput=updateDotSize;
+$('btnReset').onclick=goHome;
+$('btnNew').onclick=()=>{ $('feed').style.display='flex'; };
+$('feed').addEventListener('pointerdown',e=>{ if(e.target===$('feed')&&S.cloud) $('feed').style.display='none'; });
+
+/* ---------- tap → segment ---------- */
+const ray=new THREE.Raycaster(); const ndc=new THREE.Vector2();
+let segBusy=false;
+async function tapAt(cx,cy,neg){
+  if(!S.cloud||segBusy) return;
+  ndc.set(cx/innerWidth*2-1,-(cy/innerHeight)*2+1);
+  ray.setFromCamera(ndc,camera);
+  ray.params.Points.threshold=Math.max(.01,S.cloud.radius*.015);
+  const hits=ray.intersectObject(S.cloud.points);
+  if(!hits.length){ if(S.sel||S.seed||S.meshes.length||uni.uHasSel.value>0) clearSelection(); return; }
+  const idx=hits[0].index;
+  const u=S.cloud.uv[idx*2], v=S.cloud.uv[idx*2+1];
+  if(!S.seed) S.seed={points:[],labels:[]};
+  if(neg&&!S.seed.points.length) return;
+  S.seed.points.push([u,v]); S.seed.labels.push(neg?0:1);
+  await selectFromSeeds();
+}
+async function selectFromSeeds(){ if(S.clown) clownSelect(); else await runSeg(); }
+$('chipUndo').onclick=async()=>{
+  if(!S.seed||!S.seed.points.length) return;
+  S.seed.points.pop(); S.seed.labels.pop();
+  if(!S.seed.points.length){ clearSelection(); return; }
+  await selectFromSeeds();
+};
+function finalizeMask(mask){
+  const {w,h}=S.img; let x0=w,y0=h,x1=0,y1=0,cnt=0;
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++) if(mask[y*w+x]){cnt++;
+    if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;}
+  if(cnt<12){
+    S.seed.points.pop(); S.seed.labels.pop();
+    if(!S.seed.points.length) S.seed=null;
+    say('NOTHING THERE — TRY THE MIDDLE OF AN OBJECT','warn');
+    return false;
+  }
+  applySelection(mask,{x0,y0,x1,y1});
+  return true;
+}
+/* --- clown-pass selection: instant flat-color region lookup --- */
+function clownAt(x,y){ // average of 3x3 neighbours chromatically close to the CENTER pixel
+  const {w,h}=S.img; const i0=(y*w+x)*4;
+  const r0=S.clown[i0],g0=S.clown[i0+1],b0=S.clown[i0+2];
+  let r=0,g=0,b=0,n=0;
+  for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+    const xx=x+dx,yy=y+dy; if(xx<0||yy<0||xx>=w||yy>=h) continue;
+    const i=(yy*w+xx)*4;
+    if(Math.abs(S.clown[i]-r0)+Math.abs(S.clown[i+1]-g0)+Math.abs(S.clown[i+2]-b0)>45) continue;
+    r+=S.clown[i]; g+=S.clown[i+1]; b+=S.clown[i+2]; n++;
+  }
+  return [r/n,g/n,b/n];
+}
+function clownSelect(){
+  const {w,h}=S.img, T=60, pos=[], negC=[];
+  for(let i=0;i<S.seed.points.length;i++){
+    const x=Math.min(w-1,Math.round(S.seed.points[i][0]*w-.5));
+    const y=Math.min(h-1,Math.round(S.seed.points[i][1]*h-.5));
+    (S.seed.labels[i]?pos:negC).push(clownAt(x,y));
+  }
+  if(!pos.length) return;
+  const mask=new Uint8Array(w*h);
+  for(let p=0,i=0;p<w*h;p++,i+=4){
+    const r=S.clown[i],g=S.clown[i+1],b=S.clown[i+2];
+    let on=false;
+    for(const c of pos) if(Math.abs(r-c[0])+Math.abs(g-c[1])+Math.abs(b-c[2])<=T){on=true;break;}
+    if(on) for(const c of negC) if(Math.abs(r-c[0])+Math.abs(g-c[1])+Math.abs(b-c[2])<=T){on=false;break;}
+    mask[p]=on?1:0;
+  }
+  finalizeMask(keepSeededComponents(depthTrim(mask),w,h));
+  if(S.sel) idleStatus();
+}
+/* --- depth fusion ---------------------------------------------------
+   Depth Anything joins the selection phase two ways:
+   1. autoSeeds(): each user tap silently spawns up to 4 extra SAM prompts on a
+      ring around it — kept only where depth AND color match the tap pixel — so
+      a single tap reads as "this whole surface", not "this texture patch".
+   2. depthTrim(): the finished mask is trimmed to the object's depth band
+      (median ± 3·MAD), killing background bleed. Skipped if it would remove
+      >40% of the mask, since real objects can legitimately span depth. */
+function autoSeeds(){
+  const {w,h}=S.img, R=Math.max(4,Math.round(Math.max(w,h)*.035)), out=[];
+  for(let i=0;i<S.seed.points.length&&out.length<8;i++){
+    if(!S.seed.labels[i]) continue;
+    const x0=Math.min(w-1,Math.round(S.seed.points[i][0]*w-.5));
+    const y0=Math.min(h-1,Math.round(S.seed.points[i][1]*h-.5));
+    const d0=S.d01[y0*w+x0], q0=(y0*w+x0)*4;
+    for(const [dx,dy] of [[R,0],[-R,0],[0,R],[0,-R]]){
+      const x=x0+dx,y=y0+dy;
+      if(x<0||y<0||x>=w||y>=h) continue;
+      if(Math.abs(S.d01[y*w+x]-d0)>.07) continue;
+      const q=(y*w+x)*4;
+      if(Math.abs(S.pix[q]-S.pix[q0])+Math.abs(S.pix[q+1]-S.pix[q0+1])+Math.abs(S.pix[q+2]-S.pix[q0+2])>120) continue;
+      out.push([(x+.5)/w,(y+.5)/h]);
+    }
+  }
+  return out;
+}
+function depthTrim(mask){
+  const {w,h}=S.img;
+  const idxs=[]; for(let p=0;p<w*h;p++) if(mask[p]) idxs.push(p);
+  if(idxs.length<50) return mask;
+  const stride=Math.max(1,Math.floor(idxs.length/20000));
+  const vals=[]; for(let i=0;i<idxs.length;i+=stride) vals.push(S.d01[idxs[i]]);
+  vals.sort((a,b)=>a-b);
+  const med=vals[vals.length>>1];
+  const dev=vals.map(v=>Math.abs(v-med)).sort((a,b)=>a-b);
+  const band=Math.max(.06,3*1.4826*dev[dev.length>>1]);
+  const out=new Uint8Array(w*h); let kept=0;
+  for(const p of idxs) if(Math.abs(S.d01[p]-med)<=band){out[p]=1;kept++;}
+  return kept>=idxs.length*.6?out:mask;
+}
+async function runSeg(){
+  segBusy=true;
+  try{
+    say(S.seed.points.length>1?'REFINING…':'ISOLATING OBJECT…','busy');
+    await ensureSAM();
+    const t=TF;
+    if(sam.imgKey!==S.img.dataURL){
+      say('READING ORIGINAL…','busy');
+      const raw=await t.RawImage.read(S.img.dataURL);
+      sam.inputs=await sam.processor(raw);
+      sam.embeds=await sam.model.get_image_embeddings(sam.inputs);
+      sam.imgKey=S.img.dataURL;
+    }
+    const rs=sam.inputs.reshaped_input_sizes[0]; // [h,w]
+    const auto=autoSeeds();
+    const N=S.seed.points.length+auto.length;
+    const pts=new Float32Array(N*2); const labs=[];
+    for(let i=0;i<S.seed.points.length;i++){
+      pts[i*2]=S.seed.points[i][0]*rs[1]; pts[i*2+1]=S.seed.points[i][1]*rs[0];
+      labs.push(BigInt(S.seed.labels[i]));
+    }
+    for(let i=0;i<auto.length;i++){
+      const j=S.seed.points.length+i;
+      pts[j*2]=auto[i][0]*rs[1]; pts[j*2+1]=auto[i][1]*rs[0];
+      labs.push(1n);
+    }
+    const input_points=new t.Tensor('float32',pts,[1,1,N,2]);
+    const input_labels=new t.Tensor('int64',BigInt64Array.from(labs),[1,1,N]);
+    const out=await sam.model({...sam.embeds,input_points,input_labels});
+    const masks=await sam.processor.post_process_masks(out.pred_masks,sam.inputs.original_sizes,sam.inputs.reshaped_input_sizes);
+    const m=masks[0]; // [1,C,H,W]
+    const dims=m.dims, C=dims[dims.length-3], H=dims[dims.length-2], W=dims[dims.length-1];
+    const best=pickCandidate(m.data,C,H,W,out.iou_scores.data);
+    const {w,h}=S.img; let mask=new Uint8Array(w*h);
+    for(let y=0;y<h;y++){const my=Math.min(H-1,Math.round(y*H/h));
+      for(let x=0;x<w;x++){const mx=Math.min(W-1,Math.round(x*W/w));
+        if(m.data[best*H*W+my*W+mx]) mask[y*w+x]=1; }}
+    finalizeMask(keepSeededComponents(depthTrim(mask),w,h));
+  }catch(err){
+    console.error(err);
+    say(SANDBOXED?'SEGMENTER BLOCKED IN THIS PREVIEW — OPEN ON GITHUB PAGES':'SEGMENTER FAILED — TAP TO TRY AGAIN','err');
+  }
+  segBusy=false;
+}
+/* SAM returns 3 candidates from sub-part to whole object. Raw best-score picks the
+   sub-part; prefer the LARGEST candidate whose score is close to the best. */
+function pickCandidate(data,C,H,W,scores){
+  let bestScore=-1; for(let c=0;c<C;c++) if(scores[c]>bestScore) bestScore=scores[c];
+  let pick=0,pickArea=-1;
+  for(let c=0;c<C;c++){
+    if(scores[c]<bestScore-0.12) continue;
+    let a=0; const o=c*H*W;
+    for(let i=0;i<H*W;i++) if(data[o+i]) a++;
+    if(a>pickArea){pickArea=a;pick=c;}
+  }
+  return pick;
+}
+/* drop disconnected speckle islands: keep components containing a positive seed,
+   plus any component ≥ 25% of the largest kept one (handles occlusion splits) */
+function keepSeededComponents(mask,w,h){
+  const lab=new Int32Array(w*h); const q=new Int32Array(w*h);
+  let nlab=0; const areas=[0];
+  for(let s=0;s<w*h;s++){
+    if(!mask[s]||lab[s]) continue;
+    const id=++nlab; let head=0,tail=0; q[tail++]=s; lab[s]=id; let area=0;
+    while(head<tail){
+      const p=q[head++]; area++;
+      const x=p%w,y=(p/w)|0;
+      if(x>0&&mask[p-1]&&!lab[p-1]){lab[p-1]=id;q[tail++]=p-1;}
+      if(x<w-1&&mask[p+1]&&!lab[p+1]){lab[p+1]=id;q[tail++]=p+1;}
+      if(y>0&&mask[p-w]&&!lab[p-w]){lab[p-w]=id;q[tail++]=p-w;}
+      if(y<h-1&&mask[p+w]&&!lab[p+w]){lab[p+w]=id;q[tail++]=p+w;}
+    }
+    areas.push(area);
+  }
+  if(nlab<=1) return mask;
+  const keep=new Uint8Array(nlab+1); let maxKept=0;
+  for(let i=0;i<S.seed.points.length;i++){
+    if(!S.seed.labels[i]) continue;
+    const x=Math.min(w-1,Math.round(S.seed.points[i][0]*w-.5));
+    const y=Math.min(h-1,Math.round(S.seed.points[i][1]*h-.5));
+    const id=lab[y*w+x];
+    if(id){keep[id]=1; if(areas[id]>maxKept)maxKept=areas[id];}
+  }
+  if(!maxKept){ let big=1; for(let i=2;i<=nlab;i++) if(areas[i]>areas[big])big=i;
+    keep[big]=1; maxKept=areas[big]; }
+  for(let i=1;i<=nlab;i++) if(areas[i]>=maxKept*.25) keep[i]=1;
+  const out=new Uint8Array(w*h);
+  for(let s=0;s<w*h;s++) if(mask[s]&&keep[lab[s]]) out[s]=1;
+  return out;
+}
+function applySelection(mask,bbox){
+  const selAttr=S.cloud.geo.attributes.aSel, uv=S.cloud.uv, {w,h}=S.img;
+  const indices=[];
+  for(let k=0;k<S.cloud.n;k++){
+    const x=Math.min(w-1,Math.round(uv[k*2]*w-.5)), y=Math.min(h-1,Math.round(uv[k*2+1]*h-.5));
+    const on=mask[y*w+x]===1;
+    selAttr.array[k]=on?1:0; if(on) indices.push(k);
+  }
+  selAttr.needsUpdate=true; uni.uHasSel.value=1;
+  S.sel={mask,indices,bbox,centroid:new THREE.Vector3(),size:1};
+  computeSelWorld();
+  $('chips').classList.add('on');
+  idleStatus();
+}
+function computeSelWorld(){
+  const pos=S.cloud.geo.attributes.position.array, c=new THREE.Vector3();
+  const bmin=new THREE.Vector3(1e9,1e9,1e9), bmax=new THREE.Vector3(-1e9,-1e9,-1e9);
+  for(const k of S.sel.indices){
+    const p=new THREE.Vector3(pos[k*3],pos[k*3+1],pos[k*3+2]);
+    c.add(p); bmin.min(p); bmax.max(p);
+  }
+  c.divideScalar(S.sel.indices.length);
+  S.sel.centroid=c; S.sel.size=Math.max(bmax.x-bmin.x,bmax.y-bmin.y,bmax.z-bmin.z);
+}
+function clearSelection(){
+  if(!S.cloud) return;
+  const a=S.cloud.geo.attributes.aSel; a.array.fill(0); a.needsUpdate=true;
+  uni.uHasSel.value=0; S.sel=null; S.seed=null; $('chips').classList.remove('on');
+  for(const m of S.meshes) scene.remove(m);
+  S.meshes=[]; idleStatus();
+}
+function clearAll(keepFeedHidden){
+  clearSelection(); disposeCloud(); $('tray').classList.remove('on');
+  if(!keepFeedHidden)$('feed').style.display='flex';
+}
+$('chipClear').onclick=clearSelection;
+
+/* ---------- crops ---------- */
+function selCrop(padK,maskedCutout){
+  const {x0,y0,x1,y1}=S.sel.bbox, {w,h}=S.img;
+  const pw=Math.round((x1-x0+1)*padK), ph=Math.round((y1-y0+1)*padK);
+  const cx0=Math.max(0,x0-pw), cy0=Math.max(0,y0-ph);
+  const cx1=Math.min(w-1,x1+pw), cy1=Math.min(h-1,y1+ph);
+  const cw=cx1-cx0+1, ch=cy1-cy0+1;
+  const c=document.createElement('canvas'); c.width=cw; c.height=ch;
+  const ctx=c.getContext('2d');
+  if(maskedCutout){
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,cw,ch);
+    const src=S.img.ctx.getImageData(cx0,cy0,cw,ch);
+    const outD=ctx.getImageData(0,0,cw,ch);
+    for(let y=0;y<ch;y++)for(let x=0;x<cw;x++){
+      if(S.sel.mask[(cy0+y)*w+(cx0+x)]){
+        const i=(y*cw+x)*4;
+        outD.data[i]=src.data[i]; outD.data[i+1]=src.data[i+1];
+        outD.data[i+2]=src.data[i+2]; outD.data[i+3]=255;
+      }}
+    ctx.putImageData(outD,0,0);
+  }else{
+    ctx.drawImage(S.img.canvas,cx0,cy0,cw,ch,0,0,cw,ch);
+  }
+  return {canvas:c,cx0,cy0,cw,ch};
+}
+
+/* ---------- Krea API ---------- */
+function mapErr(st){return st===401?'INVALID API KEY':st===402?'API BALANCE EMPTY — TOP UP AT KREA → API BILLING'
+  :st===404?'UNKNOWN MODEL SLUG':st===429?'RATE LIMITED — WAIT A MOMENT':'KREA ERROR '+st;}
+function needKey(action){
+  if(LOCAL_ORIGIN){ say('LOCAL FILE ORIGIN — KREA CALLS NEED HTTPS · PUSH TO GITHUB PAGES','warn'); }
+  else if(SANDBOXED){ say('AI CALLS ARE BLOCKED IN THIS PREVIEW — HOST ON GITHUB PAGES','warn'); }
+  if(!S.krea.key){ S.pendingAction=action; openSheet('shSet'); say('ENTER YOUR KREA API KEY TO COPY','warn'); return true; }
+  return false;
+}
+function netFail(){ return LOCAL_ORIGIN?'BLOCKED: RUNNING FROM A LOCAL FILE — OPEN THE HTTPS PAGES URL'
+  :SANDBOXED?'BLOCKED BY PREVIEW SANDBOX — HOST ON HTTPS':'NETWORK BLOCKED — CHECK CONNECTION'; }
+async function kreaSubmit(path,body){
+  const r=await fetch(S.krea.base+path,{method:'POST',
+    headers:{'Authorization':'Bearer '+S.krea.key,'Content-Type':'application/json'},
+    body:JSON.stringify(body)}).catch(()=>{throw new Error(netFail());});
+  if(!r.ok) throw new Error(mapErr(r.status));
+  return r.json();
+}
+async function kreaPoll(jobId,onTick,maxMs){
+  const t0=Date.now();
+  while(Date.now()-t0<maxMs){
+    await new Promise(r=>setTimeout(r,2500));
+    const rsp=await fetch(S.krea.base+'/jobs/'+jobId,{headers:{'Authorization':'Bearer '+S.krea.key}}).catch(()=>{throw new Error(netFail());});
+    const j=await rsp.json();
+    onTick&&onTick(j,Math.round((Date.now()-t0)/1000));
+    if(j.status==='completed') return j;
+    if(j.status==='failed'||j.status==='cancelled') throw new Error('JOB '+j.status.toUpperCase()+(j.error?.message?' · '+j.error.message:''));
+  }
+  throw new Error('TIMED OUT');
+}
+async function uploadAsset(blob,name){
+  const fd=new FormData(); fd.append('file',blob,name);
+  const r=await fetch(S.krea.base+'/assets',{method:'POST',headers:{'Authorization':'Bearer '+S.krea.key},body:fd});
+  if(!r.ok) throw new Error(mapErr(r.status));
+  const j=await r.json();
+  const url=j.url||j.asset_url||j.download_url||j.asset?.url||j.result?.url||(Array.isArray(j.urls)&&j.urls[0]);
+  if(!url) throw new Error('ASSET UPLOAD: NO URL IN RESPONSE');
+  return url;
+}
+
+/* ---------- job tickets ---------- */
+let jobSeq=0;
+function ticket(kind){
+  const id=String(++jobSeq).padStart(3,'0');
+  const d=document.createElement('div'); d.className='tik run';
+  d.innerHTML=`<span class="x">✕</span>COPY ${id} · ${kind}<br><span class="st">RENDERING…</span><span class="links"></span>`;
+  d.querySelector('.x').onclick=()=>d.remove();
+  $('jobs').appendChild(d); S.jobs++;
+  return {
+    tick(s){d.querySelector('.st').textContent=s;},
+    done(links){S.jobs--;d.className='tik done';d.querySelector('.st').textContent='COMPLETE · ';
+      d.querySelector('.links').innerHTML=links||''; setTimeout(()=>{if(!links)d.remove();},9000);},
+    fail(msg){S.jobs--;d.className='tik fail';d.querySelector('.st').textContent=msg;}
+  };
+}
+
+/* ---------- CLOWN PASS ---------- */
+$('btnClown').onclick=async()=>{
+  if(!S.img) return;
+  if(needKey('clown')) return;
+  const tk=ticket('CLOWN PASS');
+  say('PAINTING CLOWN PASS — TAPS WILL BE INSTANT AFTER','busy');
+  try{
+    const job=await kreaSubmit('/generate/image/'+S.krea.clownModel,{
+      prompt:'Convert this exact photograph into a VFX clown pass (object ID matte): repaint every distinct object and surface as one single flat solid saturated color with hard edges. No shading, no gradients, no texture, no outlines, no text. Adjacent objects must use strongly different hues; the background gets its own flat color. Keep every object boundary and the whole composition pixel-aligned with the original photo.',
+      image_urls:[S.img.dataURL]});
+    const done=await kreaPoll(job.job_id,(j,s)=>tk.tick((j.status||'…').toUpperCase()+' · '+s+'S'),4*60*1000);
+    const url=done.result?.urls?.[0]; if(!url) throw new Error('NO RESULT URL');
+    const bmp=await createImageBitmap(await (await fetch(url)).blob());
+    const {w,h}=S.img;
+    const cc=document.createElement('canvas'); cc.width=w; cc.height=h;
+    const cx=cc.getContext('2d'); cx.drawImage(bmp,0,0,w,h);
+    S.clown=cx.getImageData(0,0,w,h).data;
+    tk.done(`<a href="${url}" target="_blank" rel="noopener">PASS PNG</a>`);
+    if(S.seed&&S.seed.points.length) clownSelect(); else idleStatus();
+    say('CLOWN PASS READY — TAP ANY OBJECT · INSTANT');
+  }catch(err){ console.error(err); tk.fail(String(err.message||err).toUpperCase()); say(String(err.message||err).toUpperCase(),'err'); }
+};
+
+/* ---------- REPAINT ---------- */
+$('chipPaint').onclick=()=>{
+  if(needKey('paint')) return;
+  $('paintSub').textContent=`SELECTION → ${S.krea.imgModel.toUpperCase()} → PASTED BACK INTO THE CLOUD`;
+  openSheet('shPaint'); setTimeout(()=>$('pPrompt').focus(),80);
+};
+$('pGo').onclick=async()=>{
+  const prompt=$('pPrompt').value.trim();
+  if(!prompt){$('pPrompt').focus();return;}
+  closeSheets();
+  const selSnap=S.sel; if(!selSnap) return;
+  const crop=selCrop(.14,false);
+  const dataURI=crop.canvas.toDataURL('image/jpeg',.92);
+  const tk=ticket('REPAINT');
+  say('COPYING · REPAINT SENT TO KREA','busy');
+  try{
+    const job=await kreaSubmit('/generate/image/'+S.krea.imgModel,{
+      prompt:`Edit this photo: make the main subject ${prompt}. Keep the exact camera angle, framing, lighting and every other part of the image unchanged.`,
+      image_urls:[dataURI]});
+    const done=await kreaPoll(job.job_id,(j,s)=>tk.tick((j.status||'…').toUpperCase()+' · '+s+'S'),4*60*1000);
+    const url=done.result?.urls?.[0]; if(!url) throw new Error('NO RESULT URL');
+    await pasteRepaint(url,crop,selSnap);
+    tk.done(`<a href="${url}" target="_blank" rel="noopener">PNG</a>`);
+    uni.uFlash.value=1;
+    say('COPY COMPLETE — OBJECT REPAINTED');
+  }catch(err){ console.error(err); tk.fail(String(err.message||err).toUpperCase()); say(String(err.message||err).toUpperCase(),'err'); }
+};
+async function pasteRepaint(url,crop,selSnap){
+  const blob=await (await fetch(url)).blob();
+  const bmp=await createImageBitmap(blob);
+  const rc=document.createElement('canvas'); rc.width=crop.cw; rc.height=crop.ch;
+  const rctx=rc.getContext('2d');
+  rctx.drawImage(bmp,0,0,crop.cw,crop.ch);
+  const rd=rctx.getImageData(0,0,crop.cw,crop.ch).data;
+  const {w,h}=S.img;
+  // composite masked pixels into the working canvas so future crops include it
+  const base=S.img.ctx.getImageData(crop.cx0,crop.cy0,crop.cw,crop.ch);
+  for(let y=0;y<crop.ch;y++)for(let x=0;x<crop.cw;x++){
+    if(selSnap.mask[(crop.cy0+y)*w+(crop.cx0+x)]){
+      const i=(y*crop.cw+x)*4;
+      base.data[i]=rd[i]; base.data[i+1]=rd[i+1]; base.data[i+2]=rd[i+2];
+    }}
+  S.img.ctx.putImageData(base,crop.cx0,crop.cy0);
+  S.img.dataURL=S.img.canvas.toDataURL('image/jpeg',.92);
+  S.pix=S.img.ctx.getImageData(0,0,w,h).data;
+  if(sam) sam.imgKey=null; // force fresh embeddings next tap
+  S.clown=null;            // pass is stale once pixels change — rerun 🎪 if needed
+  if(S.tex) S.tex.needsUpdate=true;  // projected photo updates in place, at full detail
+}
+
+/* ---------- MAKE 3D ---------- */
+$('chipModel').onclick=()=>{
+  if(needKey('model')) return;
+  $('modelSub').textContent=`CUTOUT → ${S.krea.model3d.toUpperCase()} → GLB DROPPED INTO THE SCENE`;
+  openSheet('shModel');
+};
+$('mGo').onclick=async()=>{
+  closeSheets();
+  const selSnap=S.sel; if(!selSnap) return;
+  const note=$('mPrompt').value.trim();
+  const crop=selCrop(.10,true);
+  const tk=ticket('3D MODEL');
+  say('COPYING · CUTOUT SENT TO KREA 3D','busy');
+  try{
+    tk.tick('UPLOADING CUTOUT…');
+    const blob=await new Promise(r=>crop.canvas.toBlob(r,'image/png'));
+    const assetUrl=await uploadAsset(blob,'vcm-cutout.png');
+    const body={input_mode:'image',image_urls:[assetUrl],generate_texture:true};
+    if(note) body.prompt=note;
+    const job=await kreaSubmit('/generate/3d/'+S.krea.model3d,body);
+    const done=await kreaPoll(job.job_id,(j,s)=>tk.tick((j.status||'…').toUpperCase()+' · '+s+'S'),8*60*1000);
+    const urls=done.result?.urls||[];
+    const glb=urls.find(u=>/\.glb(\?|$)/i.test(u))||urls.find(u=>/\.(glb|gltf)/i.test(u))||urls[0];
+    const prev=urls.find(u=>/\.(png|jpe?g|webp)(\?|$)/i.test(u));
+    if(!glb) throw new Error('NO MODEL URL IN RESULT');
+    tk.done(`<a href="${glb}" target="_blank" rel="noopener">⬇ GLB</a>`+(prev?`<a href="${prev}" target="_blank" rel="noopener">PREVIEW</a>`:''));
+    await placeGLB(glb,selSnap);
+    say('COPY COMPLETE — 3D MODEL PLACED · TAP EMPTY SPACE TO RESTORE POINTS');
+  }catch(err){ console.error(err); tk.fail(String(err.message||err).toUpperCase()); say(String(err.message||err).toUpperCase(),'err'); }
+};
+async function placeGLB(url,selSnap){
+  const buf=await (await fetch(url)).arrayBuffer();
+  const gltf=await new Promise((res,rej)=>new THREE.GLTFLoader().parse(buf,'',res,rej));
+  const root=gltf.scene||gltf.scenes[0];
+  const box=new THREE.Box3().setFromObject(root);
+  const size=box.getSize(new THREE.Vector3()), c=box.getCenter(new THREE.Vector3());
+  const sc=(selSnap.size||1)*1.05/Math.max(size.x,size.y,size.z,1e-6);
+  root.scale.setScalar(sc);
+  root.position.copy(selSnap.centroid).sub(c.multiplyScalar(sc));
+  scene.add(root); S.meshes.push(root);
+  // dissolve the copied points — the real object takes their place
+  if(S.cloud&&S.sel===selSnap){
+    const a=S.cloud.geo.attributes.aSel;
+    for(const k of selSnap.indices) a.array[k]=2;
+    a.needsUpdate=true;
+    $('chips').classList.remove('on');
+    S.sel=null; // keep uHasSel=1 so hidden points stay hidden until the next empty-space tap
+  }
+}
+
+/* ---------- sheets & settings ---------- */
+function openSheet(id){ closeSheets(); $(id).classList.add('on'); }
+function closeSheets(){ document.querySelectorAll('.sheet').forEach(s=>s.classList.remove('on')); }
+document.querySelectorAll('.sheet').forEach(s=>s.addEventListener('pointerdown',e=>{if(e.target===s)closeSheets();}));
+document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeSheets);
+$('gear').onclick=()=>openSheet('shSet');
+$('sClose').onclick=closeSheets;
+function picker(selId,cusId,def){
+  const s=$(selId),c=$(cusId);
+  s.addEventListener('change',()=>{c.hidden=s.value!=='__c';if(s.value==='__c')c.focus();});
+  return ()=>s.value==='__c'?(c.value.trim()||def):s.value;
+}
+const pickImg=picker('selImg','cusImg','google/nano-banana-2');
+const pickClown=picker('selClown','cusClown','bfl/flux-1-kontext-dev');
+const pick3d=picker('sel3d','cus3d','microsoft/trellis-2');
+const pickSam=picker('selSam','cusSam','Xenova/slimsam-50-uniform');
+$('sSave').onclick=()=>{
+  S.krea.key=$('sKey').value.trim();
+  S.krea.base=$('sBase').value.trim().replace(/\/+$/,'')||'https://api.krea.ai';
+  S.krea.imgModel=pickImg();
+  S.krea.clownModel=pickClown();
+  S.krea.model3d=pick3d();
+  const sid=pickSam();
+  if(sid!==S.samId){ S.samId=sid; sam=null; }
+  closeSheets();
+  const a=S.pendingAction; S.pendingAction=null;
+  if(a==='paint'&&S.sel&&S.krea.key) $('chipPaint').click();
+  else if(a==='model'&&S.sel&&S.krea.key) $('chipModel').click();
+  else if(a==='clown'&&S.img&&S.krea.key) $('btnClown').click();
+  else if(S.cloud) idleStatus();
+};
+
+/* ---------- boot ---------- */
+if(LOCAL_ORIGIN) say('LOCAL FILE ORIGIN — DEPTH & TAPS WORK · KREA NEEDS THE HTTPS PAGES URL','warn');
+else if(SANDBOXED) say('PREVIEW SANDBOX — HOST ON GITHUB PAGES FOR AI FEATURES','warn');
+applyCam();
+</script>
+</body>
+</html>
