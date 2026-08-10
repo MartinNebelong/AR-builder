@@ -473,6 +473,14 @@ $('btnExit').addEventListener('click', () => {
   else if (deskActive) stopDesktop();
 });
 
+/* ---- dom-overlay taps on UI also fire XR 'select' — suppress those ---- */
+let lastUITouch = 0;
+['topbar','distwrap','promptbar','settings'].forEach(id => {
+  const el = $(id);
+  el.addEventListener('beforexrselect', e => e.preventDefault());          // spec mechanism
+  el.addEventListener('pointerdown', () => { lastUITouch = performance.now(); }, true);
+});
+
 /* ---- tap-select in AR via XR select ray (drawLayer off) ----
    single tap plane = select+prompt · DOUBLE tap plane = pick up (rigid rod
    to the phone: pose relative to camera frozen at grab) · any tap = drop */
@@ -500,6 +508,7 @@ function dropHeld(){
 
 function onXRSelect(e){
   if (drawArmed || !xrRefSpace) return;
+  if (performance.now() - lastUITouch < 350) return;  // tap landed on UI, not the scene
   if (heldCut){ dropHeld(); return; }                 // any tap drops the carried plane
   const pose = e.frame.getPose(e.inputSource.targetRaySpace, xrRefSpace);
   if (!pose) return;
