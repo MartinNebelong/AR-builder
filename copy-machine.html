@@ -513,6 +513,13 @@ async function ensureDepth(){
   throw last;
 }
 async function ensureSAM(){
+  /* On WebGPU phones the full SAM ViT-B is viable (one-time ~180 MB download,
+     browser-cached) and is a different league from SlimSAM. Auto-upgrade the
+     untouched default once; any explicit Setup choice is respected. */
+  if(!S.samAuto&&S.samId==='Xenova/slimsam-50-uniform'&&navigator.gpu){
+    S.samAuto=true; S.samId='Xenova/sam-vit-base';
+    const sel=$('selSam'); if(sel) sel.value='Xenova/sam-vit-base';
+  }
   if(sam&&sam.id===S.samId) return sam;
   const t=await lib();
   const tries=[{device:'webgpu',dtype:'fp16'},{device:'wasm',dtype:'fp32'},{device:'wasm',dtype:'q8'}];
@@ -525,6 +532,12 @@ async function ensureSAM(){
       sam={id:S.samId,model,processor,imgKey:null,inputs:null,embeds:null};
       return sam;
     }catch(e){ last=e; }
+  }
+  /* full SAM too heavy for this device? fall back to SlimSAM-50 */
+  if(S.samId==='Xenova/sam-vit-base'){
+    S.samId='Xenova/slimsam-50-uniform';
+    const sel=$('selSam'); if(sel) sel.value=S.samId;
+    return ensureSAM();
   }
   throw last;
 }
@@ -690,35 +703,52 @@ function clownSelect(){
     if(on) for(const c of negC) if(Math.abs(r-c[0])+Math.abs(g-c[1])+Math.abs(b-c[2])<=T){on=false;break;}
     mask[p]=on?1:0;
   }
-  finalizeMask(keepSeededComponents(depthTrim(mask),w,h));
+  finalizeMask(keepSeededComponents(depthTrim(closeMask(mask,S.img.w,S.img.h,2)),S.img.w,S.img.h));
   if(S.sel) idleStatus();
 }
 /* --- depth fusion ---------------------------------------------------
-   Depth Anything joins the selection phase two ways:
-   1. autoSeeds(): each user tap silently spawns up to 4 extra SAM prompts on a
-      ring around it — kept only where depth AND color match the tap pixel — so
-      a single tap reads as "this whole surface", not "this texture patch".
-   2. depthTrim(): the finished mask is trimmed to the object's depth band
-      (median ± 3·MAD), killing background bleed. Skipped if it would remove
-      >40% of the mask, since real objects can legitimately span depth. */
-function autoSeeds(){
-  const {w,h}=S.img, R=Math.max(4,Math.round(Math.max(w,h)*.035)), out=[];
-  for(let i=0;i<S.seed.points.length&&out.length<8;i++){
-    if(!S.seed.labels[i]) continue;
-    const x0=Math.min(w-1,Math.round(S.seed.points[i][0]*w-.5));
-    const y0=Math.min(h-1,Math.round(S.seed.points[i][1]*h-.5));
-    const d0=S.d01[y0*w+x0], q0=(y0*w+x0)*4;
-    for(const [dx,dy] of [[R,0],[-R,0],[0,R],[0,-R]]){
-      const x=x0+dx,y=y0+dy;
-      if(x<0||y<0||x>=w||y>=h) continue;
-      if(Math.abs(S.d01[y*w+x]-d0)>.07) continue;
-      const q=(y*w+x)*4;
-      if(Math.abs(S.pix[q]-S.pix[q0])+Math.abs(S.pix[q+1]-S.pix[q0+1])+Math.abs(S.pix[q+2]-S.pix[q0+2])>120) continue;
-      out.push([(x+.5)/w,(y+.5)/h]);
+   Depth Anything JUDGES the segmenter instead of prompting it:
+   1. scoreCandidates(): SAM's three candidate masks are ranked by
+      iou x depth-coherence with the tapped pixel, with penalties for
+      degenerate near-fullscreen or tiny masks. Weak models emit inflated
+      scores on garbage masks; the depth map vetoes them.
+   2. depthTrim(): the final mask is cut to its depth band (median ± 3·MAD),
+      skipped if it would remove >40% (objects can legitimately span depth). */
+function scoreCandidates(data,C,H,W,scores,dTap){
+  const {w,h}=S.img; let best=0,bestQ=-1;
+  for(let c=0;c<C;c++){
+    let area=0,coh=0; const o=c*H*W;
+    for(let y=0;y<H;y+=3)for(let x=0;x<W;x+=3){
+      if(!data[o+y*W+x]) continue;
+      area++;
+      const ix=Math.min(w-1,Math.round((x+.5)*w/W)), iy=Math.min(h-1,Math.round((y+.5)*h/H));
+      if(Math.abs(S.d01[iy*w+ix]-dTap)<=.14) coh++;
     }
+    const frac=area/(Math.ceil(H/3)*Math.ceil(W/3));
+    let q=scores[c]*(0.45+0.55*(area?coh/area:0));
+    if(frac>.55) q*=.3;      // near-fullscreen mask: almost never what a tap means
+    if(area<8)  q*=.5;       // speck
+    if(q>bestQ){bestQ=q;best=c;}
   }
+  return best;
+}
+/* morphological close (dilate then erode, chebyshev radius r) — welds the
+   pinhole speckle weak models produce into solid regions before filtering */
+function morphPass(src,w,h,r,isMax){
+  const tmp=new Uint8Array(w*h), out=new Uint8Array(w*h);
+  for(let y=0;y<h;y++){ const row=y*w;   // horizontal window
+    for(let x=0;x<w;x++){ let v=isMax?0:1;
+      for(let k=Math.max(0,x-r),e=Math.min(w-1,x+r);k<=e;k++){const s=src[row+k];
+        if(isMax){ if(s){v=1;break;} } else { if(!s){v=0;break;} } }
+      tmp[row+x]=v; } }
+  for(let x=0;x<w;x++){                   // vertical window
+    for(let y=0;y<h;y++){ let v=isMax?0:1;
+      for(let k=Math.max(0,y-r),e=Math.min(h-1,y+r);k<=e;k++){const s=tmp[k*w+x];
+        if(isMax){ if(s){v=1;break;} } else { if(!s){v=0;break;} } }
+      out[y*w+x]=v; } }
   return out;
 }
+function closeMask(mask,w,h,r){ return morphPass(morphPass(mask,w,h,r,true),w,h,r,false); }
 function depthTrim(mask){
   const {w,h}=S.img;
   const idxs=[]; for(let p=0;p<w*h;p++) if(mask[p]) idxs.push(p);
@@ -747,48 +777,36 @@ async function runSeg(){
       sam.imgKey=S.img.dataURL;
     }
     const rs=sam.inputs.reshaped_input_sizes[0]; // [h,w]
-    const auto=autoSeeds();
-    const N=S.seed.points.length+auto.length;
-    const pts=new Float32Array(N*2); const labs=[];
+    const {w,h}=S.img;
+    const negs=S.seed.points.filter((_,i)=>!S.seed.labels[i]);
+    /* Weak SAMs handle many positive points badly — decode each positive tap
+       on its own (with all carve points attached) and UNION the results, so
+       "tap to grow" literally adds that region's best mask. Decoder is tiny;
+       embeddings are cached, so this stays fast. */
+    const union=new Uint8Array(w*h);
     for(let i=0;i<S.seed.points.length;i++){
-      pts[i*2]=S.seed.points[i][0]*rs[1]; pts[i*2+1]=S.seed.points[i][1]*rs[0];
-      labs.push(BigInt(S.seed.labels[i]));
+      if(!S.seed.labels[i]) continue;
+      const seed=S.seed.points[i], all=[seed,...negs];
+      const pts=new Float32Array(all.length*2); const labs=[];
+      all.forEach((p,j)=>{ pts[j*2]=p[0]*rs[1]; pts[j*2+1]=p[1]*rs[0]; labs.push(j===0?1n:0n); });
+      const input_points=new t.Tensor('float32',pts,[1,1,all.length,2]);
+      const input_labels=new t.Tensor('int64',BigInt64Array.from(labs),[1,1,all.length]);
+      const out=await sam.model({...sam.embeds,input_points,input_labels});
+      const masks=await sam.processor.post_process_masks(out.pred_masks,sam.inputs.original_sizes,sam.inputs.reshaped_input_sizes);
+      const m=masks[0]; // [1,C,H,W]
+      const dims=m.dims, C=dims[dims.length-3], H=dims[dims.length-2], W=dims[dims.length-1];
+      const sx=Math.min(w-1,Math.round(seed[0]*w-.5)), sy=Math.min(h-1,Math.round(seed[1]*h-.5));
+      const best=scoreCandidates(m.data,C,H,W,out.iou_scores.data,S.d01[sy*w+sx]);
+      for(let y=0;y<h;y++){const my=Math.min(H-1,Math.round(y*H/h));
+        for(let x=0;x<w;x++){const mx=Math.min(W-1,Math.round(x*W/w));
+          if(m.data[best*H*W+my*W+mx]) union[y*w+x]=1; }}
     }
-    for(let i=0;i<auto.length;i++){
-      const j=S.seed.points.length+i;
-      pts[j*2]=auto[i][0]*rs[1]; pts[j*2+1]=auto[i][1]*rs[0];
-      labs.push(1n);
-    }
-    const input_points=new t.Tensor('float32',pts,[1,1,N,2]);
-    const input_labels=new t.Tensor('int64',BigInt64Array.from(labs),[1,1,N]);
-    const out=await sam.model({...sam.embeds,input_points,input_labels});
-    const masks=await sam.processor.post_process_masks(out.pred_masks,sam.inputs.original_sizes,sam.inputs.reshaped_input_sizes);
-    const m=masks[0]; // [1,C,H,W]
-    const dims=m.dims, C=dims[dims.length-3], H=dims[dims.length-2], W=dims[dims.length-1];
-    const best=pickCandidate(m.data,C,H,W,out.iou_scores.data);
-    const {w,h}=S.img; let mask=new Uint8Array(w*h);
-    for(let y=0;y<h;y++){const my=Math.min(H-1,Math.round(y*H/h));
-      for(let x=0;x<w;x++){const mx=Math.min(W-1,Math.round(x*W/w));
-        if(m.data[best*H*W+my*W+mx]) mask[y*w+x]=1; }}
-    finalizeMask(keepSeededComponents(depthTrim(mask),w,h));
+    finalizeMask(keepSeededComponents(depthTrim(closeMask(union,w,h,2)),w,h));
   }catch(err){
     console.error(err);
     say(SANDBOXED?'SEGMENTER BLOCKED IN THIS PREVIEW — OPEN ON GITHUB PAGES':'SEGMENTER FAILED — TAP TO TRY AGAIN','err');
   }
   segBusy=false;
-}
-/* SAM returns 3 candidates from sub-part to whole object. Raw best-score picks the
-   sub-part; prefer the LARGEST candidate whose score is close to the best. */
-function pickCandidate(data,C,H,W,scores){
-  let bestScore=-1; for(let c=0;c<C;c++) if(scores[c]>bestScore) bestScore=scores[c];
-  let pick=0,pickArea=-1;
-  for(let c=0;c<C;c++){
-    if(scores[c]<bestScore-0.12) continue;
-    let a=0; const o=c*H*W;
-    for(let i=0;i<H*W;i++) if(data[o+i]) a++;
-    if(a>pickArea){pickArea=a;pick=c;}
-  }
-  return pick;
 }
 /* drop disconnected speckle islands: keep components containing a positive seed,
    plus any component ≥ 25% of the largest kept one (handles occlusion splits) */
