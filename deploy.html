@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deploy</title>
+<style>
+  :root { --gold:#d9b25e; --panel:rgba(22,26,30,.88); --ink:#e8e4da; --dim:#8f9499; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { min-height:100%; background:#0d1013;
+    background-image:radial-gradient(ellipse 120% 60% at 50% -10%, #1a2028 0%, #0d1013 60%);
+    color:var(--ink); font:11px/1.5 Helvetica, Arial, sans-serif; letter-spacing:.06em; }
+  header { padding:28px 24px 10px; }
+  h1 { font-family:Georgia, serif; font-size:26px; font-weight:400; }
+  h1 em { color:var(--gold); font-style:normal; }
+  .sub { color:var(--dim); margin-top:4px; text-transform:uppercase; font-size:10px; letter-spacing:.14em; }
+  main { max-width:640px; margin:0 auto; padding:8px 16px 60px; }
+  .card { background:var(--panel); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,.06); border-radius:8px; padding:14px; margin-top:14px; }
+  label { display:block; text-transform:uppercase; font-size:9px; letter-spacing:.16em; color:var(--dim); margin:10px 0 4px; }
+  input[type=text], input[type=password] { width:100%; background:rgba(0,0,0,.35); color:var(--ink);
+    border:1px solid rgba(255,255,255,.14); border-radius:6px; padding:10px 11px; font:12px monospace; }
+  input:focus { outline:none; border-color:var(--gold); }
+  button { font:10px Helvetica, Arial, sans-serif; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--ink); background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.14);
+    border-radius:6px; padding:10px 14px; cursor:pointer; }
+  button:hover { background:rgba(255,255,255,.1); }
+  button.gold { border-color:var(--gold); color:var(--gold); }
+  #drop { margin-top:14px; border:1px dashed rgba(217,178,94,.45); border-radius:8px;
+    background:var(--panel); padding:30px 16px; text-align:center; cursor:pointer; }
+  #drop.hot { border-color:var(--gold); }
+  #drop b { color:var(--gold); font-weight:400; }
+  input[type=file] { display:none; }
+  .file { display:flex; align-items:center; gap:10px; padding:10px 2px; border-top:1px solid rgba(255,255,255,.06); }
+  .file:first-child { border-top:0; }
+  .fname { flex:1; font-family:Georgia, serif; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fstate { font-size:9px; text-transform:uppercase; letter-spacing:.12em; color:var(--dim); }
+  .fstate.ok { color:#8fc98f; } .fstate.err { color:#e0938a; }
+  .file a { color:var(--gold); text-decoration:none; font-size:9px; letter-spacing:.1em; text-transform:uppercase; }
+  .note { margin-top:14px; padding:11px 13px; border-left:2px solid var(--gold);
+    background:rgba(22,26,30,.55); border-radius:0 8px 8px 0; color:var(--dim); font-size:10px; line-height:1.7; }
+  .note b { color:var(--ink); font-weight:400; }
+  #pushAll { width:100%; margin-top:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>De<em>ploy</em></h1>
+  <div class="sub">Browser &rarr; GitHub Pages &middot; token never leaves this tab</div>
+</header>
+<main>
+  <div class="card">
+    <label>Fine-grained token (Contents: read &amp; write)</label>
+    <input id="tok" type="password" placeholder="github_pat_&hellip;" autocomplete="off">
+    <label>Repository</label>
+    <input id="repo" type="text" value="MartinNebelong/AR-builder" autocomplete="off">
+  </div>
+
+  <div id="drop">Drop files here or <b>tap to browse</b>
+    <input id="picker" type="file" multiple>
+  </div>
+
+  <div class="card" id="listCard" style="display:none">
+    <div id="list"></div>
+    <button id="pushAll" class="gold">Push all</button>
+  </div>
+
+  <div class="note">
+    The token is held in this page's memory only &mdash; nothing is saved; closing the tab clears it.
+    Keep the token in your password manager and paste it here per session.
+    After a push, Pages takes about a minute to redeploy; hard-refresh the file's URL.
+  </div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var files = [];
+  var tok = document.getElementById('tok'), repoIn = document.getElementById('repo');
+  var drop = document.getElementById('drop'), picker = document.getElementById('picker');
+  var list = document.getElementById('list'), listCard = document.getElementById('listCard');
+
+  function pagesURL(name) {
+    var parts = repoIn.value.trim().split('/');
+    if (parts.length !== 2) return null;
+    return 'https://' + parts[0].toLowerCase() + '.github.io/' + parts[1] + '/' + encodeURIComponent(name);
+  }
+
+  function render() {
+    listCard.style.display = files.length ? '' : 'none';
+    list.innerHTML = '';
+    files.forEach(function (f) {
+      var row = document.createElement('div'); row.className = 'file';
+      var nm = document.createElement('div'); nm.className = 'fname'; nm.textContent = f.name;
+      var st = document.createElement('div');
+      st.className = 'fstate' + (f.state === 'live' ? ' ok' : (f.err ? ' err' : ''));
+      st.textContent = f.err || f.state;
+      row.appendChild(nm); row.appendChild(st);
+      if (f.state === 'live') {
+        var a = document.createElement('a');
+        a.href = pagesURL(f.name); a.target = '_blank'; a.rel = 'noopener';
+        a.textContent = 'open';
+        row.appendChild(a);
+      }
+      list.appendChild(row);
+    });
+  }
+
+  function addFiles(fl) {
+    Array.prototype.forEach.call(fl, function (file) {
+      var rd = new FileReader();
+      rd.onload = function () {
+        var b64 = String(rd.result).split(',')[1];
+        var existing = files.filter(function (f) { return f.name === file.name; })[0];
+        if (existing) { existing.b64 = b64; existing.state = 'ready'; existing.err = null; }
+        else files.push({ name: file.name, b64: b64, state: 'ready', err: null });
+        render();
+      };
+      rd.readAsDataURL(file);
+    });
+  }
+
+  function mapErr(status) {
+    if (status === 401) return 'bad token';
+    if (status === 403) return 'token lacks access';
+    if (status === 404) return 'repo not found / not in token scope';
+    if (status === 409 || status === 422) return 'conflict — retry';
+    return 'http ' + status;
+  }
+
+  function push(f) {
+    var key = tok.value.trim(), repo = repoIn.value.trim();
+    if (!key || repo.split('/').length !== 2) { f.err = 'set token + owner/repo'; render(); return Promise.resolve(); }
+    var api = 'https://api.github.com/repos/' + repo + '/contents/' + encodeURIComponent(f.name);
+    var H = { 'Authorization': 'Bearer ' + key, 'Accept': 'application/vnd.github+json' };
+    f.state = 'pushing\u2026'; f.err = null; render();
+    return fetch(api, { headers: H })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (cur) {
+        var body = { message: 'Deploy ' + f.name, content: f.b64 };
+        if (cur && cur.sha) body.sha = cur.sha;
+        return fetch(api, { method: 'PUT', headers: H, body: JSON.stringify(body) });
+      })
+      .then(function (r) {
+        if (r.ok) { f.state = 'live'; }
+        else { f.state = 'failed'; f.err = mapErr(r.status); }
+        render();
+      })
+      .catch(function () { f.state = 'failed'; f.err = 'network / CORS'; render(); });
+  }
+
+  document.getElementById('pushAll').addEventListener('click', function () {
+    // sequential — same-file sha races are impossible, and rate limits stay happy
+    files.reduce(function (p, f) { return p.then(function () { return push(f); }); }, Promise.resolve());
+  });
+
+  drop.addEventListener('click', function () { picker.click(); });
+  picker.addEventListener('change', function () { addFiles(picker.files); picker.value = ''; });
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('hot'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('hot'); });
+  });
+  document.addEventListener('drop', function (e) {
+    if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
+})();
+</script>
+</body>
+</html>
