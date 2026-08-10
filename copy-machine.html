@@ -218,7 +218,8 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
     </select><input id="cus3d" class="cus" hidden placeholder="vendor/model" autocomplete="off"></div>
   <div class="f"><label>Segmenter (on-device)</label>
     <select id="selSam">
-      <option value="Xenova/slimsam-50-uniform" selected>SlimSAM-50 · balanced</option>
+      <option value="__wand" selected>Depth wand · instant, deterministic</option>
+      <option value="Xenova/slimsam-50-uniform">SlimSAM-50 · neural, CPU</option>
       <option value="Xenova/slimsam-77-uniform">SlimSAM-77 · fastest, roughest</option>
       <option value="Xenova/sam-vit-base">SAM ViT-B · best masks · ~360 MB</option>
       <option value="__c">Custom repo…</option>
@@ -275,7 +276,7 @@ const S={
   clown:null,          // Uint8ClampedArray RGBA w*h — flat-color object ID pass from Krea
   pix:null,            // Uint8ClampedArray RGBA w*h — working image pixels (cached)
   tex:null,            // THREE.CanvasTexture of the working image, projected onto the dots
-  samId:'Xenova/slimsam-50-uniform',
+  samId:'__wand',
   meshes:[],           // placed GLBs
   krea:{key:'',base:'https://api.krea.ai',imgModel:'google/nano-banana-2',clownModel:'bfl/flux-1-kontext-dev',model3d:'microsoft/trellis-2'},
   jobs:0, pendingAction:null,
@@ -517,9 +518,7 @@ let samForce=null;   // 'wasm-fp32' once GPU output is detected as numerically b
 async function ensureSAM(){
   if(sam&&sam.id===S.samId&&sam.force===samForce) return sam;
   const t=await lib();
-  const tries=samForce==='wasm-fp32'
-    ?[{device:'wasm',dtype:'fp32'}]
-    :[{device:'webgpu',dtype:'fp32'},{device:'wasm',dtype:'fp32'},{device:'wasm',dtype:'q8'}];
+  const tries=[{device:'wasm',dtype:'fp32'},{device:'wasm',dtype:'q8'}];  // GPU SAM decode proven unreliable on mobile
   let last;
   for(const o of tries){
     try{
@@ -667,7 +666,7 @@ async function tapAt(cx,cy,neg){
   S.seed.points.push([u,v]); S.seed.labels.push(neg?0:1);
   await selectFromSeeds();
 }
-async function selectFromSeeds(){ if(S.clown) clownSelect(); else await runSeg(); }
+async function selectFromSeeds(){ if(S.clown) clownSelect(); else if(S.samId==='__wand') wandSelect(); else await runSeg(); }
 $('chipUndo').onclick=async()=>{
   if(!S.seed||!S.seed.points.length) return;
   S.seed.points.pop(); S.seed.labels.pop();
@@ -794,6 +793,57 @@ function depthTrim(mask){
   const out=new Uint8Array(w*h); let kept=0;
   for(const p of idxs) if(Math.abs(S.d01[p]-med)<=band){out[p]=1;kept++;}
   return kept>=idxs.length*.6?out:mask;
+}
+/* --- DEPTH WAND: deterministic region grow, no neural network ------------
+   From each positive tap, flood-fill accepting a neighbour when
+   (a) depth is locally continuous (small per-step delta),
+   (b) it stays inside a global depth band around the seed, and
+   (c) its color stays near the seed's color.
+   Negative (hold) taps grow their own region and subtract it. Instant,
+   identical on every device, and composes with tap-to-grow naturally. */
+const WAND={dStep:.016,dBand:.12,colT:130};
+function wandGrow(sx,sy){
+  const {w,h}=S.img, d0=S.d01[sy*w+sx], q0=(sy*w+sx)*4;
+  const r0=S.pix[q0],g0=S.pix[q0+1],b0=S.pix[q0+2];
+  const out=new Uint8Array(w*h), q=new Int32Array(w*h);
+  let head=0,tail=0; const s0=sy*w+sx; out[s0]=1; q[tail++]=s0;
+  while(head<tail){
+    const p=q[head++], px=p%w, py=(p/w)|0, dp=S.d01[p];
+    const nb=[p-1,p+1,p-w,p+w], ok=[px>0,px<w-1,py>0,py<h-1];
+    for(let i=0;i<4;i++){
+      if(!ok[i]) continue;
+      const n=nb[i]; if(out[n]) continue;
+      if(Math.abs(S.d01[n]-dp)>WAND.dStep) continue;          // local continuity
+      if(Math.abs(S.d01[n]-d0)>WAND.dBand) continue;          // global band
+      const qn=n*4;
+      if(Math.abs(S.pix[qn]-r0)+Math.abs(S.pix[qn+1]-g0)+Math.abs(S.pix[qn+2]-b0)>WAND.colT) continue;
+      out[n]=1; q[tail++]=n;
+    }
+  }
+  return out;
+}
+function wandSelect(){
+  const {w,h}=S.img;
+  const mask=new Uint8Array(w*h);
+  let anyPos=false;
+  for(let i=0;i<S.seed.points.length;i++){
+    if(!S.seed.labels[i]) continue;
+    anyPos=true;
+    const x=Math.min(w-1,Math.round(S.seed.points[i][0]*w-.5));
+    const y=Math.min(h-1,Math.round(S.seed.points[i][1]*h-.5));
+    const g=wandGrow(x,y);
+    for(let p=0;p<w*h;p++) if(g[p]) mask[p]=1;
+  }
+  if(!anyPos) return;
+  for(let i=0;i<S.seed.points.length;i++){
+    if(S.seed.labels[i]) continue;
+    const x=Math.min(w-1,Math.round(S.seed.points[i][0]*w-.5));
+    const y=Math.min(h-1,Math.round(S.seed.points[i][1]*h-.5));
+    const g=wandGrow(x,y);
+    for(let p=0;p<w*h;p++) if(g[p]) mask[p]=0;
+  }
+  finalizeMask(keepSeededComponents(closeMask(mask,w,h,1),w,h));
+  if(S.sel) idleStatus();
 }
 async function runSeg(){
   segBusy=true;
@@ -1154,7 +1204,7 @@ function picker(selId,cusId,def){
 const pickImg=picker('selImg','cusImg','google/nano-banana-2');
 const pickClown=picker('selClown','cusClown','bfl/flux-1-kontext-dev');
 const pick3d=picker('sel3d','cus3d','microsoft/trellis-2');
-const pickSam=picker('selSam','cusSam','Xenova/slimsam-50-uniform');
+const pickSam=picker('selSam','cusSam','__wand');
 $('sSave').onclick=()=>{
   S.krea.key=$('sKey').value.trim();
   S.krea.base=$('sBase').value.trim().replace(/\/+$/,'')||'https://api.krea.ai';
