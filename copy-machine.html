@@ -588,6 +588,7 @@ function buildCloud(){
   geo.computeBoundingSphere();
   if(S.tex) S.tex.dispose();
   S.tex=new THREE.CanvasTexture(S.img.canvas);
+  S.tex.flipY=false;   // our uv is image-space (v=0 = top); three's default flips canvas uploads
   S.tex.minFilter=THREE.LinearFilter; S.tex.magFilter=THREE.LinearFilter;
   S.tex.wrapS=S.tex.wrapT=THREE.ClampToEdgeWrapping; S.tex.generateMipmaps=false;
   uni.uMap.value=S.tex; uni.uTan.value.set(tanH,TANV);
