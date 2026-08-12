@@ -188,6 +188,8 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:0;border-radiu
   <div class="f"><label>Krea API key</label><input id="sKey" type="password" placeholder="krea_…" autocomplete="off">
     <div class="hint">krea.ai → settings → API tokens. API balance is billed separately from the app plan.</div></div>
   <div class="f"><label>API base</label><input id="sBase" value="https://api.krea.ai"></div>
+  <div class="f"><label>Result proxy (optional)</label><input id="sProxy" placeholder="https://corsproxy.io/?url=" autocomplete="off">
+    <div class="hint">Krea's CDN blocks pixel readback (CORS). Any prefix proxy works — corsproxy.io for quick tests, or your own 5-line Cloudflare Worker for privacy.</div></div>
   <div class="f"><label>Repaint model</label>
     <select id="selImg">
       <option value="google/nano-banana-2" selected>Nano Banana 2 · cheap edits</option>
@@ -278,7 +280,7 @@ const S={
   tex:null,            // THREE.CanvasTexture of the working image, projected onto the dots
   samId:'__wand',
   meshes:[],           // placed GLBs
-  krea:{key:'',base:'https://api.krea.ai',imgModel:'google/nano-banana-2',clownModel:'bfl/flux-1-kontext-dev',model3d:'microsoft/trellis-2'},
+  krea:{key:'',base:'https://api.krea.ai',proxy:'',imgModel:'google/nano-banana-2',clownModel:'bfl/flux-1-kontext-dev',model3d:'microsoft/trellis-2'},
   jobs:0, pendingAction:null,
 };
 
@@ -1077,8 +1079,16 @@ async function uploadAsset(blob,name){
   return url;
 }
 async function fetchResult(url,as){ // as: 'bitmap' | 'buffer'
-  const r=await fetch(url).catch(()=>{throw new Error('RESULT MADE BUT DOWNLOAD BLOCKED (CORS) — OPEN THE LINK IN THE TICKET');});
-  if(!r.ok) throw new Error('RESULT DOWNLOAD FAILED ('+r.status+') — OPEN THE LINK IN THE TICKET');
+  const attempts=[
+    ()=>fetch(url),
+    ()=>fetch(url,{referrerPolicy:'no-referrer',cache:'no-store'}),
+  ];
+  if(S.krea.proxy) attempts.push(()=>fetch(S.krea.proxy+encodeURIComponent(url)));
+  let r=null;
+  for(const a of attempts){ try{ r=await a(); if(r.ok) break; r=null; }catch(_){ r=null; } }
+  if(!r) throw new Error(S.krea.proxy
+    ?'RESULT MADE BUT DOWNLOAD BLOCKED EVEN VIA PROXY — CHECK PROXY URL IN ⚙'
+    :'RESULT MADE BUT DOWNLOAD BLOCKED (CORS) — SET A RESULT PROXY IN ⚙ SETUP · LINK IN TICKET');
   return as==='buffer'?r.arrayBuffer():createImageBitmap(await r.blob());
 }
 
@@ -1264,6 +1274,7 @@ const pickSam=picker('selSam','cusSam','__wand');
 $('sSave').onclick=()=>{
   S.krea.key=$('sKey').value.trim();
   S.krea.base=$('sBase').value.trim().replace(/\/+$/,'')||'https://api.krea.ai';
+  S.krea.proxy=$('sProxy').value.trim();
   S.krea.imgModel=pickImg();
   S.krea.clownModel=pickClown();
   S.krea.model3d=pick3d();
