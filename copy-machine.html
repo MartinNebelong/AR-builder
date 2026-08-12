@@ -471,7 +471,7 @@ async function feed(file){
     const ctx=c.getContext('2d',{willReadFrequently:true});
     ctx.drawImage(im,0,0,w,h); URL.revokeObjectURL(url);
     S.img={canvas:c,ctx,w,h,dataURL:c.toDataURL('image/jpeg',.92)};
-    S.clown=null;
+    S.clown=null; S.regLab=null;
     clearAll(true);
     $('feed').style.display='none';
     $('scanImg').src=S.img.dataURL; $('scan').classList.add('on');
@@ -715,7 +715,8 @@ function clownSelect(){
     if(on) for(const c of negC) if(Math.abs(r-c[0])+Math.abs(g-c[1])+Math.abs(b-c[2])<=T){on=false;break;}
     mask[p]=on?1:0;
   }
-  finalizeMask(keepSeededComponents(depthTrim(closeMask(mask,S.img.w,S.img.h,2)),S.img.w,S.img.h));
+  if(!S.regLab) buildRegions();
+  finalizeMask(holeFill(snapToRegions(mask)));
   if(S.sel) idleStatus();
 }
 /* --- depth fusion ---------------------------------------------------
@@ -794,55 +795,83 @@ function depthTrim(mask){
   for(const p of idxs) if(Math.abs(S.d01[p]-med)<=band){out[p]=1;kept++;}
   return kept>=idxs.length*.6?out:mask;
 }
-/* --- DEPTH WAND: deterministic region grow, no neural network ------------
-   From each positive tap, flood-fill accepting a neighbour when
-   (a) depth is locally continuous (small per-step delta),
-   (b) it stays inside a global depth band around the seed, and
-   (c) its color stays near the seed's color.
-   Negative (hold) taps grow their own region and subtract it. Instant,
-   identical on every device, and composes with tap-to-grow naturally. */
-const WAND={dStep:.016,dBand:.12,colT:130};
-function wandGrow(sx,sy){
-  const {w,h}=S.img, d0=S.d01[sy*w+sx], q0=(sy*w+sx)*4;
-  const r0=S.pix[q0],g0=S.pix[q0+1],b0=S.pix[q0+2];
-  const out=new Uint8Array(w*h), q=new Int32Array(w*h);
-  let head=0,tail=0; const s0=sy*w+sx; out[s0]=1; q[tail++]=s0;
-  while(head<tail){
-    const p=q[head++], px=p%w, py=(p/w)|0, dp=S.d01[p];
-    const nb=[p-1,p+1,p-w,p+w], ok=[px>0,px<w-1,py>0,py<h-1];
-    for(let i=0;i<4;i++){
-      if(!ok[i]) continue;
-      const n=nb[i]; if(out[n]) continue;
-      if(Math.abs(S.d01[n]-dp)>WAND.dStep) continue;          // local continuity
-      if(Math.abs(S.d01[n]-d0)>WAND.dBand) continue;          // global band
-      const qn=n*4;
-      if(Math.abs(S.pix[qn]-r0)+Math.abs(S.pix[qn+1]-g0)+Math.abs(S.pix[qn+2]-b0)>WAND.colT) continue;
-      out[n]=1; q[tail++]=n;
-    }
+/* --- REGION MAP: the cloud's natural clusters, computed once -------------
+   Union-find over the pixel grid; neighbours connect when depth AND color are
+   LOCALLY continuous. Smooth shading flows through; silhouette depth-cliffs
+   and hard color edges become region boundaries. Selection then works on
+   whole clusters: instant lookups instead of per-tap flood fills. */
+const REG={dStep:.014,cLoc:60};
+function buildRegions(){
+  const {w,h}=S.img, n=w*h;
+  const parent=new Int32Array(n); for(let i=0;i<n;i++) parent[i]=i;
+  const find=i=>{ while(parent[i]!==i){ parent[i]=parent[parent[i]]; i=parent[i]; } return i; };
+  const join=(a,b)=>{ a=find(a); b=find(b); if(a!==b) parent[b]=a; };
+  const D=S.d01, P=S.pix;
+  const ok=(a,b)=>{
+    if(Math.abs(D[a]-D[b])>REG.dStep) return false;
+    const qa=a*4, qb=b*4;
+    return Math.abs(P[qa]-P[qb])+Math.abs(P[qa+1]-P[qb+1])+Math.abs(P[qa+2]-P[qb+2])<=REG.cLoc;
+  };
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const p=y*w+x;
+    if(x<w-1&&ok(p,p+1)) join(p,p+1);
+    if(y<h-1&&ok(p,p+w)) join(p,p+w);
   }
+  const lab=new Int32Array(n); const ids=new Map();
+  for(let i=0;i<n;i++){
+    const r=find(i);
+    let id=ids.get(r); if(id===undefined){ id=ids.size+1; ids.set(r,id); }
+    lab[i]=id;
+  }
+  S.regLab=lab; S.regCount=ids.size;
+}
+function regionOfSeed(i){
+  const {w,h}=S.img;
+  const x=Math.min(w-1,Math.round(S.seed.points[i][0]*w-.5));
+  const y=Math.min(h-1,Math.round(S.seed.points[i][1]*h-.5));
+  return S.regLab[y*w+x];
+}
+/* exact enclosed-hole fill: flood the complement from the image border;
+   complement pixels the flood can't reach are holes -> include them */
+function holeFill(mask){
+  const {w,h}=S.img, n=w*h;
+  const seen=new Uint8Array(n), q=new Int32Array(n); let tail=0;
+  for(let x=0;x<w;x++){ for(const p of [x,(h-1)*w+x]) if(!mask[p]&&!seen[p]){seen[p]=1;q[tail++]=p;} }
+  for(let y=0;y<h;y++){ for(const p of [y*w,y*w+w-1]) if(!mask[p]&&!seen[p]){seen[p]=1;q[tail++]=p;} }
+  let head=0;
+  while(head<tail){
+    const p=q[head++], x=p%w, y=(p/w)|0;
+    if(x>0&&!mask[p-1]&&!seen[p-1]){seen[p-1]=1;q[tail++]=p-1;}
+    if(x<w-1&&!mask[p+1]&&!seen[p+1]){seen[p+1]=1;q[tail++]=p+1;}
+    if(y>0&&!mask[p-w]&&!seen[p-w]){seen[p-w]=1;q[tail++]=p-w;}
+    if(y<h-1&&!mask[p+w]&&!seen[p+w]){seen[p+w]=1;q[tail++]=p+w;}
+  }
+  const out=new Uint8Array(n);
+  for(let p=0;p<n;p++) out[p]=mask[p]||!seen[p]?1:0;
+  return out;
+}
+/* project any pixel mask onto the region map: a cluster joins when >45% covered */
+function snapToRegions(mask){
+  const {w,h}=S.img;
+  const tot=new Int32Array(S.regCount+1), hit=new Int32Array(S.regCount+1);
+  for(let p=0;p<w*h;p++){ tot[S.regLab[p]]++; if(mask[p]) hit[S.regLab[p]]++; }
+  const out=new Uint8Array(w*h);
+  for(let p=0;p<w*h;p++) if(hit[S.regLab[p]]>tot[S.regLab[p]]*.45) out[p]=1;
   return out;
 }
 function wandSelect(){
   const {w,h}=S.img;
-  const mask=new Uint8Array(w*h);
-  let anyPos=false;
-  for(let i=0;i<S.seed.points.length;i++){
-    if(!S.seed.labels[i]) continue;
-    anyPos=true;
-    const x=Math.min(w-1,Math.round(S.seed.points[i][0]*w-.5));
-    const y=Math.min(h-1,Math.round(S.seed.points[i][1]*h-.5));
-    const g=wandGrow(x,y);
-    for(let p=0;p<w*h;p++) if(g[p]) mask[p]=1;
-  }
-  if(!anyPos) return;
-  for(let i=0;i<S.seed.points.length;i++){
-    if(S.seed.labels[i]) continue;
-    const x=Math.min(w-1,Math.round(S.seed.points[i][0]*w-.5));
-    const y=Math.min(h-1,Math.round(S.seed.points[i][1]*h-.5));
-    const g=wandGrow(x,y);
-    for(let p=0;p<w*h;p++) if(g[p]) mask[p]=0;
-  }
-  finalizeMask(keepSeededComponents(closeMask(mask,w,h,1),w,h));
+  if(!S.regLab) buildRegions();
+  const on=new Set(), off=new Set();
+  for(let i=0;i<S.seed.points.length;i++)
+    (S.seed.labels[i]?on:off).add(regionOfSeed(i));
+  for(const r of off) on.delete(r);
+  if(!on.size) return;
+  let mask=new Uint8Array(w*h);
+  for(let p=0;p<w*h;p++) if(on.has(S.regLab[p])) mask[p]=1;
+  mask=holeFill(mask);
+  if(off.size) for(let p=0;p<w*h;p++) if(off.has(S.regLab[p])) mask[p]=0; // carved clusters stay out
+  finalizeMask(mask);
   if(S.sel) idleStatus();
 }
 async function runSeg(){
@@ -891,7 +920,8 @@ async function runSeg(){
       say('GPU SEGMENTER GLITCHED — SWITCHING TO PRECISION MODE…','busy');
       segBusy=false; return runSeg();
     }
-    finalizeMask(keepSeededComponents(depthTrim(closeMask(union,w,h,2)),w,h));
+    if(!S.regLab) buildRegions();
+    finalizeMask(holeFill(snapToRegions(union)));
   }catch(err){
     console.error(err);
     say(SANDBOXED?'SEGMENTER BLOCKED IN THIS PREVIEW — OPEN ON GITHUB PAGES':'SEGMENTER FAILED — TAP TO TRY AGAIN','err');
@@ -1141,6 +1171,7 @@ async function pasteRepaint(url,crop,selSnap){
   S.pix=S.img.ctx.getImageData(0,0,w,h).data;
   if(sam) sam.imgKey=null; // force fresh embeddings next tap
   S.clown=null;            // pass is stale once pixels change — rerun 🎪 if needed
+  S.regLab=null;           // clusters too — lazily rebuilt on next tap
   if(S.tex) S.tex.needsUpdate=true;  // projected photo updates in place, at full detail
 }
 
