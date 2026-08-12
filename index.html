@@ -222,6 +222,7 @@
 <div id="hint">træk · rotér &nbsp;/&nbsp; shift+træk · panorér &nbsp;/&nbsp; scroll · zoom &nbsp;/&nbsp; dobbeltklik · nulstil</div>
 
 <div id="arOverlay" style="display:none">
+  <div id="arGestures"></div>
   <canvas id="arSketch"></canvas>
   <div id="arHint">Peg på jorden og tryk for at placere terrassen 1:1</div>
   <div id="arBtns">
@@ -234,6 +235,7 @@
 </div>
 <style>
   #arOverlay{position:fixed;inset:0;pointer-events:none;z-index:30;font-family:var(--sans)}
+  #arGestures{position:absolute;inset:0;pointer-events:auto;touch-action:none}
   #arSketch{position:absolute;inset:0;pointer-events:none;touch-action:none}
   #arOverlay.drawing #arSketch{pointer-events:auto}
   #arHint{
@@ -1416,8 +1418,74 @@ function arPlace(){
   modelGroup.position.copy(hit).sub(anchor);
   modelGroup.visible = true;
   arPlaced = true;
-  document.getElementById('arHint').textContent = 'Terrassen står 1:1 — gå rundt om den';
+  document.getElementById('arHint').textContent = 'Tr\u00e6k for at flytte \u00b7 drej med to fingre';
 }
+
+/* ---------- AR-gestik: træk flytter, to fingre roterer ---------- */
+const arGl = document.getElementById('arGestures');
+const arPtrs = new Map();
+const arRC = new THREE.Raycaster();
+const AR_UP = new THREE.Vector3(0,1,0);
+let arTap=null, arGrab=null, arAng=null, arMid=null;
+
+function arRayPoint(x,y){
+  arRC.setFromCamera(new THREE.Vector2((x/innerWidth)*2-1, -(y/innerHeight)*2+1), camera);
+  const dy = arRC.ray.direction.y;
+  if(Math.abs(dy) < 1e-4) return null;
+  const t = (modelGroup.position.y - arRC.ray.origin.y)/dy;
+  if(t < 0 || t > 60) return null;
+  return arRC.ray.origin.clone().addScaledVector(arRC.ray.direction, t);
+}
+function arRotateAroundAnchor(dAng){
+  if(!lastBuild) return;
+  const pivot = new THREE.Vector3(lastBuild.totalW/2*MM, 0, lastBuild.frontZ*MM)
+    .applyAxisAngle(AR_UP, modelGroup.rotation.y)
+    .add(modelGroup.position);
+  modelGroup.rotation.y += dAng;
+  const v = modelGroup.position.clone().sub(pivot).applyAxisAngle(AR_UP, dAng);
+  modelGroup.position.copy(pivot).add(v);
+}
+arGl.addEventListener('pointerdown', e=>{
+  arGl.setPointerCapture(e.pointerId);
+  arPtrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  if(arPtrs.size === 1){
+    arTap = {x:e.clientX, y:e.clientY, t:performance.now()};
+    if(arPlaced){
+      const p = arRayPoint(e.clientX, e.clientY);
+      arGrab = p ? modelGroup.position.clone().sub(p) : null;
+    }
+  } else { arTap=null; arGrab=null; arAng=null; arMid=null; }
+});
+arGl.addEventListener('pointermove', e=>{
+  const p = arPtrs.get(e.pointerId); if(!p) return;
+  p.x = e.clientX; p.y = e.clientY;
+  if(arTap && Math.hypot(e.clientX-arTap.x, e.clientY-arTap.y) > 12) arTap=null;
+  if(!arPlaced) return;
+  if(arPtrs.size === 1 && arGrab){
+    const pt = arRayPoint(e.clientX, e.clientY);
+    if(pt) modelGroup.position.set(pt.x+arGrab.x, modelGroup.position.y, pt.z+arGrab.z);
+  } else if(arPtrs.size === 2){
+    const [a,b] = [...arPtrs.values()];
+    const ang = Math.atan2(b.y-a.y, b.x-a.x);
+    const mid = {x:(a.x+b.x)/2, y:(a.y+b.y)/2};
+    if(arAng !== null) arRotateAroundAnchor(-(ang-arAng));
+    if(arMid){
+      const p1 = arRayPoint(arMid.x, arMid.y), p2 = arRayPoint(mid.x, mid.y);
+      if(p1 && p2) modelGroup.position.add(new THREE.Vector3(p2.x-p1.x, 0, p2.z-p1.z));
+    }
+    arAng = ang; arMid = mid;
+  }
+});
+function arPtrEnd(e){
+  arPtrs.delete(e.pointerId);
+  if(arPtrs.size < 2){ arAng=null; arMid=null; }
+  if(arPtrs.size === 0){
+    if(arTap && performance.now()-arTap.t < 350 && !arPlaced) arPlace();
+    arTap=null; arGrab=null;
+  }
+}
+arGl.addEventListener('pointerup', arPtrEnd);
+arGl.addEventListener('pointercancel', arPtrEnd);
 
 document.getElementById('arMove').addEventListener('click', ()=>{
   arPlaced = false; modelGroup.visible = false;
@@ -1455,7 +1523,7 @@ document.getElementById('arDraw').addEventListener('click', function(){
   document.getElementById('arClear').style.display = drawMode ? '' : 'none';
   document.getElementById('arHint').textContent = drawMode
     ? 'Tegn med fingeren — tryk Tegn igen for at flytte kameraet frit'
-    : (arPlaced ? 'Terrassen står 1:1 — gå rundt om den'
+    : (arPlaced ? 'Træk for at flytte · drej med to fingre'
                 : 'Peg på jorden og tryk for at placere terrassen 1:1');
 });
 document.getElementById('arClear').addEventListener('click', ()=>{
