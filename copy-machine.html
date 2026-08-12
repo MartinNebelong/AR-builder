@@ -1029,7 +1029,8 @@ function selCrop(padK,maskedCutout){
 function mapErr(st){return st===401?'INVALID API KEY':st===402?'API BALANCE EMPTY — TOP UP AT KREA → API BILLING'
   :st===404?'UNKNOWN MODEL SLUG':st===422?'MODEL REJECTED THE REQUEST (422)':st===429?'RATE LIMITED — WAIT A MOMENT':'KREA ERROR '+st;}
 async function kreaFail(r){
-  let d=''; try{const j=await r.json(); d=j.detail?JSON.stringify(j.detail):(j.error?.message||j.message||'');}
+  let d=''; try{const j=await r.json();
+    d=j.detail?JSON.stringify(j.detail):(typeof j.error==='string'?j.error:(j.error?.message||j.message||''));}
   catch(_){ try{d=await r.text();}catch(__){} }
   return new Error(mapErr(r.status)+(d?' · '+String(d).slice(0,140).toUpperCase():''));
 }
@@ -1081,6 +1082,25 @@ async function fetchResult(url,as){ // as: 'bitmap' | 'buffer'
   return as==='buffer'?r.arrayBuffer():createImageBitmap(await r.blob());
 }
 
+/* Different Krea models take their image input under different fields:
+   Flux/Kontext = image_url (singular, + explicit width/height so the output
+   isn't squared), Nano Banana family = image_urls (array). Unknown slugs get
+   one automatic retry with the flipped shape on a 422. */
+function kontextDims(w,h){
+  let sc=Math.max(1,512/Math.min(w,h));
+  if(Math.max(w,h)*sc>2368) sc=2368/Math.max(w,h);
+  return {width:Math.round(w*sc),height:Math.round(h*sc)};
+}
+async function submitImageJob(model,url,prompt,w,h){
+  const singular=/kontext|^bfl\//.test(model);
+  const primary=singular?{prompt,image_url:url,...kontextDims(w,h)}:{prompt,image_urls:[url]};
+  try{ return await kreaSubmit('/generate/image/'+model,primary); }
+  catch(e){
+    if(!/\(422\)/.test(String(e.message))) throw e;
+    const flipped=singular?{prompt,image_urls:[url]}:{prompt,image_url:url,...kontextDims(w,h)};
+    return kreaSubmit('/generate/image/'+model,flipped);
+  }
+}
 /* ---------- job tickets ---------- */
 let jobSeq=0;
 function ticket(kind){
@@ -1107,9 +1127,9 @@ $('btnClown').onclick=async()=>{
     tk.tick('UPLOADING ORIGINAL…');
     const srcBlob=await new Promise(r=>S.img.canvas.toBlob(r,'image/jpeg',.92));
     const srcUrl=await uploadAsset(srcBlob,'vcm-original.jpg');
-    const job=await kreaSubmit('/generate/image/'+S.krea.clownModel,{
-      prompt:'Convert this exact photograph into a VFX clown pass (object ID matte): repaint every distinct object and surface as one single flat solid saturated color with hard edges. No shading, no gradients, no texture, no outlines, no text. Adjacent objects must use strongly different hues; the background gets its own flat color. Keep every object boundary and the whole composition pixel-aligned with the original photo.',
-      image_urls:[srcUrl]});
+    const job=await submitImageJob(S.krea.clownModel,srcUrl,
+      'Convert this exact photograph into a VFX clown pass (object ID matte): repaint every distinct object and surface as one single flat solid saturated color with hard edges. No shading, no gradients, no texture, no outlines, no text. Adjacent objects must use strongly different hues; the background gets its own flat color. Keep every object boundary and the whole composition pixel-aligned with the original photo.',
+      S.img.w,S.img.h);
     const done=await kreaPoll(job.job_id,(j,s)=>tk.tick((j.status||'…').toUpperCase()+' · '+s+'S'),4*60*1000);
     const url=done.result?.urls?.[0]; if(!url) throw new Error('NO RESULT URL');
     tk.done(`<a href="${url}" target="_blank" rel="noopener">PASS PNG</a>`);
@@ -1141,9 +1161,9 @@ $('pGo').onclick=async()=>{
     tk.tick('UPLOADING CROP…');
     const cropBlob=await new Promise(r=>crop.canvas.toBlob(r,'image/jpeg',.92));
     const cropUrl=await uploadAsset(cropBlob,'vcm-crop.jpg');
-    const job=await kreaSubmit('/generate/image/'+S.krea.imgModel,{
-      prompt:`Edit this photo: make the main subject ${prompt}. Keep the exact camera angle, framing, lighting and every other part of the image unchanged.`,
-      image_urls:[cropUrl]});
+    const job=await submitImageJob(S.krea.imgModel,cropUrl,
+      `Edit this photo: make the main subject ${prompt}. Keep the exact camera angle, framing, lighting and every other part of the image unchanged.`,
+      crop.cw,crop.ch);
     const done=await kreaPoll(job.job_id,(j,s)=>tk.tick((j.status||'…').toUpperCase()+' · '+s+'S'),4*60*1000);
     const url=done.result?.urls?.[0]; if(!url) throw new Error('NO RESULT URL');
     tk.done(`<a href="${url}" target="_blank" rel="noopener">PNG</a>`);
