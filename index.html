@@ -1180,13 +1180,13 @@ function exportPDFInner(){
     doc.setDrawColor(DIM); doc.setLineWidth(0.25);
     doc.line(x1,y,x2,y); tick(x1,y,45); tick(x2,y,45);
     doc.setFontSize(8); doc.setTextColor(INK);
-    doc.text(label, (x1+x2)/2, y-1.2, {align:'center'});
+    doc.text(String(label), (x1+x2)/2, y-1.2, {align:'center'});
   }
   function dimV(x,y1,y2,label){
     doc.setDrawColor(DIM); doc.setLineWidth(0.25);
     doc.line(x,y1,x,y2); tick(x,y1,45); tick(x,y2,45);
     doc.setFontSize(8); doc.setTextColor(INK);
-    doc.text(label, x-1.4, (y1+y2)/2, {align:'center', angle:90});
+    doc.text(String(label), x-1.4, (y1+y2)/2, {align:'center', angle:90});
   }
   function ground(x1,x2,y){
     doc.setDrawColor(INK); doc.setLineWidth(0.5); doc.line(x1,y,x2,y);
