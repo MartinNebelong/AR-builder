@@ -1036,8 +1036,13 @@ async function uploadAsset(blob,name){
     .catch(()=>{throw new Error(netFail());});
   if(!r.ok) throw await kreaFail(r);
   const j=await r.json();
-  const url=j.url||j.asset_url||j.download_url||j.asset?.url||j.result?.url||(Array.isArray(j.urls)&&j.urls[0]);
-  if(!url) throw new Error('ASSET UPLOAD: NO URL IN RESPONSE');
+  /* per Krea's OpenAPI spec the field is image_url; deep-scan as future-proofing */
+  let url=j.image_url||j.url||j.asset_url||j.download_url||j.asset?.url||j.result?.url||(Array.isArray(j.urls)&&j.urls[0]);
+  if(!url){ const scan=o=>{ for(const v of Object.values(o||{})){
+      if(typeof v==='string'&&/^https:\/\//.test(v)) return v;
+      if(v&&typeof v==='object'){const f=scan(v); if(f) return f;} } };
+    url=scan(j); }
+  if(!url) throw new Error('ASSET UPLOAD: NO URL IN RESPONSE · KEYS: '+Object.keys(j).join(',').toUpperCase().slice(0,80));
   return url;
 }
 async function fetchResult(url,as){ // as: 'bitmap' | 'buffer'
