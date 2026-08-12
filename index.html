@@ -146,6 +146,10 @@
     <input type="range" id="sFB" min="2" max="4" step="1">
     <div class="row"><span class="name">Bredde, trappe</span><span class="val" id="vSW"></span></div>
     <input type="range" id="sSW" min="900" max="3000" step="50">
+    <div class="row"><span class="name">Repos, højde</span><span class="val" id="vRH"></span></div>
+    <input type="range" id="sRH" min="0" max="350" step="5">
+    <div class="row"><span class="name">Repos, dybde</span><span class="val" id="vRD"></span></div>
+    <input type="range" id="sRD" min="300" max="1500" step="50">
     <div class="row"><span class="name">Dæk, dybde</span><span class="val" id="vDD"></span></div>
     <input type="range" id="sDD" min="1000" max="3200" step="50">
     <button id="btnFormel">Optimér stigninger til trappeformlen</button>
@@ -161,6 +165,12 @@
     <input type="range" id="sG" min="4" max="8" step="0.5">
     <div class="row"><span class="name">Lagerlængde</span><span class="val" id="vStock"></span></div>
     <input type="range" id="sStock" min="2000" max="6100" step="20">
+    <div class="row"><span class="name">Bænk-sider (endebrædder)</span></div>
+    <select id="selSides">
+      <option value="horisontal">Vandrette brædder</option>
+      <option value="vertikal">Lodrette brædder</option>
+      <option value="ingen">Ingen (åben side)</option>
+    </select>
   </div>
 
   <div class="sec">
@@ -193,9 +203,6 @@
     </select>
     <div class="toggle" id="tXray">
       <span class="name">Vis konstruktion<small>skjul brædder — strøer, stolper og lister</small></span><span class="sw"></span>
-    </div>
-    <div class="toggle" id="tConstr">
-      <span class="name">Vis konstruktion<small>skjul brædder — strøer, kantregler, stolper</small></span><span class="sw"></span>
     </div>
   </div>
 
@@ -273,6 +280,9 @@ const P = {
   screws: true,
   construction: false,   // vis kun underkonstruktion
   stairCon: 'vanger',    // 'vanger' (savtak-skabelon) eller 'rammer'
+  reposH: 150,           // repos under nederste trappetrin (0 = ingen)
+  reposD: 600,
+  benchSides: 'horisontal', // 'horisontal' | 'vertikal' | 'ingen'
   seed: 7,
   joint: 8          // samling mellem bænk- og trappefelt
 };
@@ -454,6 +464,15 @@ function buildDims(D, nb, totalW){
   dim(V(sx,-160,0), V(sx,-160,run), Yn,
       'udl\u00e6g '+fmt(run), true,
       V(totalW,0,0), V(totalW,0,run));
+  if(P.reposH > 24){
+    const rz0=(n-1)*g, rz1=rz0+P.reposD;
+    dim(V(sx,P.reposH+90,rz0), V(sx,P.reposH+90,rz1), Yt,
+        'repos '+fmt(P.reposD), false,
+        V(totalW,P.reposH,rz0), V(totalW,P.reposH,rz1));
+    dim(V(sx,0,rz1+90), V(sx,P.reposH,rz1+90), Zt,
+        'h '+fmt(P.reposH), false,
+        V(totalW,0,rz1), V(totalW,P.reposH,rz1));
+  }
 
   /* --- bænkesiden (venstre plan) --- */
   if(nb>=1){
@@ -538,8 +557,8 @@ function build(){
   const totalW = P.benchW + P.joint + P.stairW;
 
   /* --- hjælpere (mm ind, gemmer til lister) --- */
-  function addBoard(x0,x1, cy,cz, sy,sz){
-    boards.push({x0,x1, cy,cz, sy,sz, merged:false});
+  function addBoard(x0,x1, cy,cz, sy,sz, trueLen){
+    boards.push({x0,x1, cy,cz, sy,sz, trueLen: trueLen||0, merged:false});
   }
   function addCore(cx,cy,cz,sx,sy,sz){ cores.push({x:cx*MM,y:cy*MM,z:cz*MM,sx:sx*MM,sy:sy*MM,sz:sz*MM}); }
   function addFrame(cx,cy,cz,sx,sy,sz,rx){
@@ -675,7 +694,57 @@ function build(){
     }
   }
 
-  /* dæk bagved, fuld bredde */
+  /* --- repos: lav platform under nederste trappetrin --- */
+  const stairFront = (D.n-1)*D.g;
+  const hasRepos = P.reposH > 24;
+  if(hasRepos){
+    const z0 = stairFront, z1 = stairFront + P.reposD;
+    deckBoards(sx0,sx1, z0, z1, P.reposH);
+    faceBoards(sx0,sx1, z1, P.reposH, 0, true);
+    addCore((sx0+sx1)/2, 1.5+(P.reposH-P.bt-3.5)/2, z0 + (z1-z0-P.bt)/2, (sx1-sx0-8), P.reposH-P.bt-3.5, z1-z0-P.bt-6);
+    /* lav ramme: vanger + strøer — fladt lagt hvis der ikke er højde til 95 */
+    const yFr = P.reposH - P.bt;
+    const hF = Math.max(30, Math.min(95, yFr-4));
+    addFrame((sx0+sx1)/2, yFr-hF/2, z1-P.bt-22.5, sx1-sx0-16, hF, 45);
+    addFrame((sx0+sx1)/2, yFr-hF/2, z0+24.5, sx1-sx0-16, hF, 45);
+    const ri0=z0+49, ri1=z1-P.bt-47;
+    if(ri1-ri0 > 40)
+      for(const px of frameXs(sx0,sx1, 60, 400))
+        addFrame(px, yFr-hF/2, (ri0+ri1)/2, 45, hF, ri1-ri0);
+  }
+  D.reposOn = hasRepos;
+
+  /* --- bænk-sider: endebrædder på ydersiden (x=0), inkl. dækkets side --- */
+  if(P.benchSides !== 'ingen'){
+    const zones = [{z0:-P.deckD+2, z1:-2, top:P.H}];
+    for(let j=0;j<nb-1;j++) zones.push({z0:j*D.gb+2, z1:(j+1)*D.gb-2, top:P.H-(j+1)*D.rb});
+    for(const zn of zones){
+      const len = zn.z1 - zn.z0;
+      if(P.benchSides === 'horisontal'){
+        /* vandrette brædder stablet fra overkant, nederste tilskåret mod terræn */
+        let topEdge = zn.top;
+        while(topEdge > 40){
+          const bh = Math.min(P.bw, topEdge - 4);
+          addBoard(-P.bt, 0, topEdge-bh/2, (zn.z0+zn.z1)/2, bh, len, len);
+          addScrew(-P.bt-0.4, topEdge-bh/2, zn.z0+45, 'x');
+          addScrew(-P.bt-0.4, topEdge-bh/2, zn.z1-45, 'x');
+          topEdge -= (bh + P.gap);
+          if(bh < P.bw) break;
+        }
+      } else {
+        /* lodrette brædder lagt fra forkanten og bagud */
+        let z = zn.z1;
+        while(z - zn.z0 > 12){
+          const w = Math.min(P.bw, z - zn.z0 - 2);
+          addBoard(-P.bt, 0, (zn.top-4)/2+2, z-w/2, zn.top-8, w, zn.top);
+          addScrew(-P.bt-0.4, zn.top-60, z-w/2, 'x');
+          addScrew(-P.bt-0.4, 60, z-w/2, 'x');
+          z -= (w + P.gap);
+        }
+      }
+    }
+  }
+
   deckBoards(0,totalW, -P.deckD, 0, P.H);
   addCore(totalW/2, (P.H-P.bt-2)/2, -(P.deckD)/2 - P.bt, totalW-8, P.H-P.bt-2, P.deckD-P.bt-6);
   /* dækkets underkonstruktion: for-/bagvange, strøer c/c ≤400 (langs z),
@@ -781,7 +850,7 @@ function build(){
   stats.joints = joints;
   const pieceLens = [];
   for(const b of finalBoards){
-    const L = b.x1 - b.x0;
+    const L = b.trueLen || (b.x1 - b.x0);
     stats.lm += L/1000;
     pieceLens.push(L);
   }
@@ -834,7 +903,7 @@ function build(){
   screws.forEach((s,i)=>{
     dummy.position.set(s.x,s.y,s.z);
     dummy.scale.set(1,1,1);
-    dummy.rotation.set(s.axis==='z' ? Math.PI/2 : 0, 0, 0);
+    dummy.rotation.set(s.axis==='z' ? Math.PI/2 : 0, 0, s.axis==='x' ? Math.PI/2 : 0);
     dummy.updateMatrix();
     screwMesh.setMatrixAt(i, dummy.matrix);
   });
@@ -885,7 +954,7 @@ function build(){
   scene.add(sun.target);
 
   updateReadout(D, nb, totalW);
-  return {D, nb, totalW, runS, frontZ: Math.max((D.n-1)*D.g, Math.max(0,nb-1)*D.gb)};
+  return {D, nb, totalW, runS, frontZ: Math.max((D.n-1)*D.g + (P.reposH>24 ? P.reposD : 0), Math.max(0,nb-1)*D.gb)};
 }
 
 /* ---------- readout ---------- */
@@ -902,6 +971,7 @@ function updateReadout(D, nb, totalW){
     `<span class="dot ${okS?'ok':'warn'}"></span>stigning <b>${fmt(D.rs)}</b> mm <span style="opacity:.7">(maks 180)</span><br>` +
     `<span class="dot ${okG?'ok':'warn'}"></span>grund <b>${fmt(D.g)}</b> mm <span style="opacity:.7">(min 250 · ${P.k} brædder)</span><br>` +
     `<span class="dot ${okF?'ok':'warn'}"></span>2S+G = <b>${fmt(formel)}</b> mm <span style="opacity:.7">(ideal 610–630)</span>` +
+    (P.reposH > 24 ? `<br>repos <b>${fmt(P.reposH)} \u00d7 ${fmt(P.reposD)}</b> mm` : ``) +
     `<hr>` +
     `<b>B\u00e6nketrin</b> \u00d7 ${nb}<br>` +
     `stigning <b>${fmt(P.align?2*D.rs:P.benchR)}</b> \u00b7 grund <b>${fmt(P.align?2*D.g:P.benchG)}</b> mm<br>` +
@@ -1024,6 +1094,8 @@ bindSlider('sK','vK','k','brd.');
 bindSlider('sBW','vBW','benchW','mm');
 bindSlider('sFB','vFB','benchFrontBoards','brd.');
 bindSlider('sSW','vSW','stairW','mm');
+bindSlider('sRH','vRH','reposH','mm');
+bindSlider('sRD','vRD','reposD','mm');
 bindSlider('sDD','vDD','deckD','mm');
 bindSlider('sG','vG','gap','mm');
 bindSlider('sStock','vStock','stock','mm');
@@ -1044,6 +1116,9 @@ document.getElementById('selProfile').addEventListener('change', e=>{
 });
 document.getElementById('selCon').addEventListener('change', e=>{
   P.stairCon = e.target.value; rebuild();
+});
+document.getElementById('selSides').addEventListener('change', e=>{
+  P.benchSides = e.target.value; rebuild();
 });
 document.getElementById('btnFormel').addEventListener('click', ()=>{
   // vælg antal stigninger så 2S+G rammer 620 mm tættest muligt (grund er låst til brædder)
@@ -1072,7 +1147,15 @@ document.getElementById('btnPNG').addEventListener('click', ()=>{
 
 /* ---------- PDF-arbejdstegninger ---------- */
 function exportPDF(){
-  if(!lastBuild || !window.jspdf) return;
+  if(!window.jspdf || !window.jspdf.jsPDF){
+    alert('PDF-biblioteket kunne ikke indl\u00e6ses \u2014 tjek netforbindelsen og pr\u00f8v igen (virker bedst p\u00e5 den udgivne side).');
+    return;
+  }
+  if(!lastBuild) return;
+  try{ exportPDFInner(); }
+  catch(err){ alert('PDF-fejl: '+err.message); console.error(err); }
+}
+function exportPDFInner(){
   const {D, nb, totalW, frontZ} = lastBuild;
   const doc = new window.jspdf.jsPDF({orientation:'landscape', unit:'mm', format:'a4'});
   const W=297, Hp=210, INK='#2a241a', ACC='#b35c28', DIM='#6d6455';
@@ -1155,10 +1238,18 @@ function exportPDF(){
   header('Snit A\u2013A \u00b7 Trappefelt', 2);
   {
     const run=(D.n-1)*D.g;
-    const s=Math.min(200/(run+900), 150/(P.H+300));
+    const rD = P.reposH>24 ? P.reposD : 0;
+    const s=Math.min(200/(run+rD+900), 150/(P.H+300));
     const ox=40, oy=185;
-    ground(ox+run*s, ox+run*s+40, oy);
+    ground(ox+(run+rD)*s, ox+(run+rD)*s+40, oy);
     const pr=profile(ox, oy, s, D.rs, D.g, D.n, 0, 0);
+    if(rD){
+      doc.setDrawColor(INK); doc.setLineWidth(0.6);
+      doc.line(pr.X(run), pr.Y(P.reposH), pr.X(run+rD), pr.Y(P.reposH));
+      doc.line(pr.X(run+rD), pr.Y(P.reposH), pr.X(run+rD), pr.Y(0));
+      dimH(pr.X(run), pr.X(run+rD), pr.Y(P.reposH)-4, 'repos '+fmt(P.reposD));
+      dimV(pr.X(run+rD)+6, pr.Y(P.reposH), pr.Y(0), fmt(P.reposH));
+    }
     dimV(ox-18, oy-P.H*s, oy, fmt(P.H));
     dimH(pr.X(0), pr.X(run), oy+10, 'udl\u00e6g '+fmt(run));
     dimV(pr.X(D.g)+6, pr.Y(P.H-D.rs), pr.Y(P.H-2*D.rs), fmt(D.rs)+' \u00d7'+D.n);
