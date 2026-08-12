@@ -215,24 +215,31 @@
 <div id="hint">træk · rotér &nbsp;/&nbsp; shift+træk · panorér &nbsp;/&nbsp; scroll · zoom &nbsp;/&nbsp; dobbeltklik · nulstil</div>
 
 <div id="arOverlay" style="display:none">
+  <canvas id="arSketch"></canvas>
   <div id="arHint">Peg på jorden og tryk for at placere terrassen 1:1</div>
   <div id="arBtns">
+    <button id="arDraw">Tegn</button>
+    <button id="arClear" style="display:none">Ryd</button>
+    <button id="arShot">Gem</button>
     <button id="arMove">Flyt</button>
-    <button id="arExit">Afslut AR</button>
+    <button id="arExit">Afslut</button>
   </div>
 </div>
 <style>
   #arOverlay{position:fixed;inset:0;pointer-events:none;z-index:30;font-family:var(--sans)}
+  #arSketch{position:absolute;inset:0;pointer-events:none;touch-action:none}
+  #arOverlay.drawing #arSketch{pointer-events:auto}
   #arHint{
     position:absolute;top:18px;left:50%;transform:translateX(-50%);
     background:#14110ccc;color:var(--ink);padding:9px 16px;border-radius:20px;
     font-size:13px;white-space:nowrap;
   }
-  #arBtns{position:absolute;bottom:26px;left:50%;transform:translateX(-50%);display:flex;gap:10px;pointer-events:auto}
+  #arBtns{position:absolute;bottom:26px;left:50%;transform:translateX(-50%);display:flex;gap:8px;pointer-events:auto}
   #arBtns button{
-    width:auto;margin:0;padding:11px 22px;border-radius:22px;font-size:14px;
+    width:auto;margin:0;padding:11px 16px;border-radius:22px;font-size:14px;
     background:#14110cdd;color:var(--ink);border:1px solid var(--hair);
   }
+  #arBtns button.active{border-color:var(--jatoba);color:var(--jatoba-hi)}
   #arBtns #arExit{border-color:var(--jatoba);color:var(--jatoba-hi)}
 </style>
 
@@ -1276,6 +1283,7 @@ function startAR(){
     sun.castShadow = false;
     arPlaced = false;
     modelGroup.visible = false;
+    sizeSketch();
     document.getElementById('arOverlay').style.display = 'block';
     document.getElementById('panel').classList.remove('open');
     updateViewOffset();
@@ -1285,6 +1293,12 @@ function startAR(){
     session.addEventListener('select', arPlace);
     session.addEventListener('end', ()=>{
       xrHitSource = null; reticle.visible = false;
+      drawMode = false; lastPt = null;
+      document.getElementById('arDraw').classList.remove('active');
+      document.getElementById('arClear').style.display = 'none';
+      document.getElementById('arOverlay').classList.remove('drawing');
+      sctx.save(); sctx.setTransform(1,0,0,1,0,0);
+      sctx.clearRect(0,0,sketch.width,sketch.height); sctx.restore();
       document.getElementById('arOverlay').style.display = 'none';
       scene.background = envSaved.bg; scene.fog = envSaved.fog;
       envMeshes.forEach((m,i)=>m.visible = envSaved.vis[i]);
@@ -1321,6 +1335,56 @@ document.getElementById('arMove').addEventListener('click', ()=>{
 document.getElementById('arExit').addEventListener('click', ()=>{
   const s = renderer.xr.getSession(); if(s) s.end();
 });
+
+/* ---------- AR-canvas: skitsér oven på den forankrede model ---------- */
+const sketch = document.getElementById('arSketch');
+const sctx = sketch.getContext('2d');
+let drawMode = false, lastPt = null;
+function sizeSketch(){
+  const dpr = Math.min(devicePixelRatio, 2);
+  sketch.width = innerWidth*dpr; sketch.height = innerHeight*dpr;
+  sketch.style.width = innerWidth+'px'; sketch.style.height = innerHeight+'px';
+  sctx.setTransform(dpr,0,0,dpr,0,0);
+  sctx.lineWidth = 4; sctx.lineCap = 'round'; sctx.lineJoin = 'round';
+  sctx.strokeStyle = '#e0854a';
+}
+sketch.addEventListener('pointerdown', e=>{ if(drawMode){ sketch.setPointerCapture(e.pointerId); lastPt={x:e.clientX,y:e.clientY}; }});
+sketch.addEventListener('pointermove', e=>{
+  if(!drawMode || !lastPt) return;
+  sctx.beginPath(); sctx.moveTo(lastPt.x,lastPt.y); sctx.lineTo(e.clientX,e.clientY); sctx.stroke();
+  lastPt={x:e.clientX,y:e.clientY};
+});
+sketch.addEventListener('pointerup', ()=>lastPt=null);
+sketch.addEventListener('pointercancel', ()=>lastPt=null);
+
+document.getElementById('arDraw').addEventListener('click', function(){
+  drawMode = !drawMode;
+  this.classList.toggle('active', drawMode);
+  document.getElementById('arOverlay').classList.toggle('drawing', drawMode);
+  document.getElementById('arClear').style.display = drawMode ? '' : 'none';
+  document.getElementById('arHint').textContent = drawMode
+    ? 'Tegn med fingeren — tryk Tegn igen for at flytte kameraet frit'
+    : (arPlaced ? 'Terrassen står 1:1 — gå rundt om den'
+                : 'Peg på jorden og tryk for at placere terrassen 1:1');
+});
+document.getElementById('arClear').addEventListener('click', ()=>{
+  sctx.save(); sctx.setTransform(1,0,0,1,0,0);
+  sctx.clearRect(0,0,sketch.width,sketch.height); sctx.restore();
+});
+document.getElementById('arShot').addEventListener('click', ()=>{
+  const c = document.createElement('canvas');
+  c.width = renderer.domElement.width; c.height = renderer.domElement.height;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#14110c';
+  ctx.fillRect(0,0,c.width,c.height);
+  try{ ctx.drawImage(renderer.domElement, 0,0,c.width,c.height); }catch(e){}
+  ctx.drawImage(sketch, 0,0,c.width,c.height);
+  const a = document.createElement('a');
+  a.download = 'terrasse-ar-skitse-'+Date.now()+'.png';
+  a.href = c.toDataURL('image/png');
+  a.click();
+});
+
 document.getElementById('arOverlay').addEventListener('beforexrselect', e=>e.preventDefault());
 document.getElementById('btnAR').addEventListener('click', startAR);
 if(!navigator.xr){ document.getElementById('btnAR').style.display='none'; }
