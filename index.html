@@ -1418,23 +1418,26 @@ function arPlace(){
   modelGroup.position.copy(hit).sub(anchor);
   modelGroup.visible = true;
   arPlaced = true;
-  document.getElementById('arHint').textContent = 'Tr\u00e6k for at flytte \u00b7 drej med to fingre';
+  document.getElementById('arHint').textContent = 'Tr\u00e6k: flyt \u00b7 knib: frem/tilbage \u00b7 drej: rot\u00e9r';
 }
 
-/* ---------- AR-gestik: træk flytter, to fingre roterer ---------- */
+/* ---------- AR-gestik: 1 finger flytter, knib flytter frem/tilbage,
+     to-finger drejning roterer om forankringen ---------- */
 const arGl = document.getElementById('arGestures');
 const arPtrs = new Map();
-const arRC = new THREE.Raycaster();
 const AR_UP = new THREE.Vector3(0,1,0);
-let arTap=null, arGrab=null, arAng=null, arMid=null;
+let arTap=null, arAng=null, arPinch=null;
 
-function arRayPoint(x,y){
-  arRC.setFromCamera(new THREE.Vector2((x/innerWidth)*2-1, -(y/innerHeight)*2+1), camera);
-  const dy = arRC.ray.direction.y;
-  if(Math.abs(dy) < 1e-4) return null;
-  const t = (modelGroup.position.y - arRC.ray.origin.y)/dy;
-  if(t < 0 || t > 60) return null;
-  return arRC.ray.origin.clone().addScaledVector(arRC.ray.direction, t);
+function arCamAxes(){
+  const cp = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+  const fwd = new THREE.Vector3();
+  camera.getWorldDirection(fwd);
+  fwd.y = 0;
+  if(fwd.lengthSq() < 1e-6) fwd.set(0,0,-1); else fwd.normalize();
+  const right = new THREE.Vector3().crossVectors(fwd, AR_UP); // skærm-højre
+  right.y = 0; right.normalize();
+  const dist = Math.max(0.8, cp.distanceTo(modelGroup.position));
+  return {fwd, right, dist};
 }
 function arRotateAroundAnchor(dAng){
   if(!lastBuild) return;
@@ -1450,38 +1453,39 @@ arGl.addEventListener('pointerdown', e=>{
   arPtrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
   if(arPtrs.size === 1){
     arTap = {x:e.clientX, y:e.clientY, t:performance.now()};
-    if(arPlaced){
-      const p = arRayPoint(e.clientX, e.clientY);
-      arGrab = p ? modelGroup.position.clone().sub(p) : null;
-    }
-  } else { arTap=null; arGrab=null; arAng=null; arMid=null; }
+  } else { arTap=null; arAng=null; arPinch=null; }
 });
 arGl.addEventListener('pointermove', e=>{
   const p = arPtrs.get(e.pointerId); if(!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
   p.x = e.clientX; p.y = e.clientY;
   if(arTap && Math.hypot(e.clientX-arTap.x, e.clientY-arTap.y) > 12) arTap=null;
   if(!arPlaced) return;
-  if(arPtrs.size === 1 && arGrab){
-    const pt = arRayPoint(e.clientX, e.clientY);
-    if(pt) modelGroup.position.set(pt.x+arGrab.x, modelGroup.position.y, pt.z+arGrab.z);
+  if(arPtrs.size === 1){
+    /* 1 finger: op/ned = frem/tilbage på gulvet, venstre/højre = sideværts */
+    const {fwd, right, dist} = arCamAxes();
+    const s = dist*0.0016;
+    modelGroup.position.addScaledVector(right, dx*s);
+    modelGroup.position.addScaledVector(fwd, -dy*s);
   } else if(arPtrs.size === 2){
     const [a,b] = [...arPtrs.values()];
     const ang = Math.atan2(b.y-a.y, b.x-a.x);
-    const mid = {x:(a.x+b.x)/2, y:(a.y+b.y)/2};
+    const pinch = Math.hypot(b.x-a.x, b.y-a.y);
     if(arAng !== null) arRotateAroundAnchor(-(ang-arAng));
-    if(arMid){
-      const p1 = arRayPoint(arMid.x, arMid.y), p2 = arRayPoint(mid.x, mid.y);
-      if(p1 && p2) modelGroup.position.add(new THREE.Vector3(p2.x-p1.x, 0, p2.z-p1.z));
+    if(arPinch !== null){
+      /* knib: spred = mod dig, knib sammen = væk fra dig */
+      const {fwd, dist} = arCamAxes();
+      modelGroup.position.addScaledVector(fwd, -(pinch-arPinch)*dist*0.0016);
     }
-    arAng = ang; arMid = mid;
+    arAng = ang; arPinch = pinch;
   }
 });
 function arPtrEnd(e){
   arPtrs.delete(e.pointerId);
-  if(arPtrs.size < 2){ arAng=null; arMid=null; }
+  if(arPtrs.size < 2){ arAng=null; arPinch=null; }
   if(arPtrs.size === 0){
     if(arTap && performance.now()-arTap.t < 350 && !arPlaced) arPlace();
-    arTap=null; arGrab=null;
+    arTap=null;
   }
 }
 arGl.addEventListener('pointerup', arPtrEnd);
@@ -1523,7 +1527,7 @@ document.getElementById('arDraw').addEventListener('click', function(){
   document.getElementById('arClear').style.display = drawMode ? '' : 'none';
   document.getElementById('arHint').textContent = drawMode
     ? 'Tegn med fingeren — tryk Tegn igen for at flytte kameraet frit'
-    : (arPlaced ? 'Træk for at flytte · drej med to fingre'
+    : (arPlaced ? 'Træk: flyt · knib: frem/tilbage · drej: rotér'
                 : 'Peg på jorden og tryk for at placere terrassen 1:1');
 });
 document.getElementById('arClear').addEventListener('click', ()=>{
