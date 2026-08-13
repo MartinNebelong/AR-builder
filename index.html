@@ -142,6 +142,8 @@
     <input type="range" id="sK" min="2" max="3" step="1">
     <div class="row"><span class="name">Bredde, bænk</span><span class="val" id="vBW"></span></div>
     <input type="range" id="sBW" min="1200" max="4200" step="50">
+    <div class="row"><span class="name">Dybde, bænketrin</span><span class="val" id="vBD"></span></div>
+    <input type="range" id="sBD" min="450" max="1200" step="10">
     <div class="row"><span class="name">Nederste bænkefront</span><span class="val" id="vFB"></span></div>
     <input type="range" id="sFB" min="2" max="4" step="1">
     <div class="row"><span class="name">Bredde, trappe</span><span class="val" id="vSW"></span></div>
@@ -181,8 +183,6 @@
     <div id="freeBench" style="display:none">
       <div class="row"><span class="name">Bænk, stigning</span><span class="val" id="vBR"></span></div>
       <input type="range" id="sBR" min="260" max="460" step="5">
-      <div class="row"><span class="name">Bænk, grund</span><span class="val" id="vBG"></span></div>
-      <input type="range" id="sBG" min="450" max="800" step="10">
     </div>
     <div class="toggle on" id="tThrough">
       <span class="name">Gennemgående brædder<small>ét bræt hen over samlingen hvor planer flugter</small></span><span class="sw"></span>
@@ -226,6 +226,7 @@
   <canvas id="arSketch"></canvas>
   <div id="arHint">Peg på jorden og tryk for at placere terrassen 1:1</div>
   <div id="arBtns">
+    <button id="arLift">Løft</button>
     <button id="arDraw">Tegn</button>
     <button id="arClear" style="display:none">Ryd</button>
     <button id="arShot">Gem</button>
@@ -256,7 +257,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 'use strict';
-const VERSION='v2.5';
+const VERSION='v2.6';
 document.getElementById('ver').textContent=VERSION;
 console.log('Terrassebygger', VERSION);
 /* =========================================================
@@ -537,8 +538,9 @@ function derive(){
   const rs = P.H / n;
   const g  = P.k * pitch;
   const rb = P.align ? 2*rs : P.benchR;
-  const gb = P.align ? 2*g  : P.benchG;
-  return {pitch, n, rs, g, rb, gb};
+  const gb = Math.max(2, Math.round(P.benchG/pitch))*pitch;   // bænkedybde, snappet til hele brædder
+  const zA = Math.abs(gb - 2*g) < 0.5;                        // forkanter flugter kun ved 2× grund
+  return {pitch, n, rs, g, rb, gb, zA};
 }
 
 function build(){
@@ -778,7 +780,7 @@ function build(){
 
   /* --- flugtlinjer: fælles forkanter på tværs af felterne --- */
   lineGroup = new THREE.Group();
-  if(P.align && P.showLines){
+  if(P.align && P.showLines && D.zA){
     for(let e=0; e<=D.n-2; e+=2){
       const y = P.H - e*D.rs;
       const z = e*D.g;
@@ -979,7 +981,7 @@ function updateReadout(D, nb, totalW){
     (P.reposH > 24 ? `<br>repos <b>${fmt(P.reposH)} \u00d7 ${fmt(P.reposD)}</b> mm` : ``) +
     `<hr>` +
     `<b>B\u00e6nketrin</b> \u00d7 ${nb}<br>` +
-    `stigning <b>${fmt(P.align?2*D.rs:P.benchR)}</b> \u00b7 grund <b>${fmt(P.align?2*D.g:P.benchG)}</b> mm<br>` +
+    `stigning <b>${fmt(D.rb)}</b> \u00b7 grund <b>${fmt(D.gb)}</b> mm` + (D.zA?``:` <span style="opacity:.7">(flugter ikke 2\u00d7 trappe)</span>`) + `<br>` +
     `front <b>${fmt(D.benchBottom - D.gY)}</b> mm \u00b7 ${D.frontN} br\u00e6dder` +
     (D.gY < -1 ? ` <span style="opacity:.7">(terr\u00e6n \u00f7${fmt(-D.gY)})</span>` : ``) + `<br>` +
     `<span class="dot ${okSeat?'ok':'warn'}"></span>siddehøjde <b>${fmt(seat)}</b> mm` +
@@ -1098,6 +1100,7 @@ bindSlider('sN','vN','n','stk.');
 bindSlider('sK','vK','k','brd.');
 bindSlider('sBW','vBW','benchW','mm');
 bindSlider('sFB','vFB','benchFrontBoards','brd.');
+bindSlider('sBD','vBD','benchG','mm');
 bindSlider('sSW','vSW','stairW','mm');
 bindSlider('sRH','vRH','reposH','mm');
 bindSlider('sRD','vRD','reposD','mm');
@@ -1105,7 +1108,6 @@ bindSlider('sDD','vDD','deckD','mm');
 bindSlider('sG','vG','gap','mm');
 bindSlider('sStock','vStock','stock','mm');
 bindSlider('sBR','vBR','benchR','mm');
-bindSlider('sBG','vBG','benchG','mm');
 
 bindToggle('tAlign','align', ()=>{
   document.getElementById('freeBench').style.display = P.align ? 'none':'block';
@@ -1393,6 +1395,8 @@ function startAR(){
     session.addEventListener('end', ()=>{
       xrHitSource = null; reticle.visible = false;
       drawMode = false; lastPt = null;
+      arLiftMode = false;
+      document.getElementById('arLift').classList.remove('active');
       document.getElementById('arDraw').classList.remove('active');
       document.getElementById('arClear').style.display = 'none';
       document.getElementById('arOverlay').classList.remove('drawing');
@@ -1432,7 +1436,7 @@ function arPlace(){
 const arGl = document.getElementById('arGestures');
 const arPtrs = new Map();
 const AR_UP = new THREE.Vector3(0,1,0);
-let arTap=null, arAng=null, arPinch=null;
+let arTap=null, arAng=null, arPinch=null, arLiftMode=false;
 
 function arCamAxes(){
   const cp = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
@@ -1468,11 +1472,16 @@ arGl.addEventListener('pointermove', e=>{
   if(arTap && Math.hypot(e.clientX-arTap.x, e.clientY-arTap.y) > 12) arTap=null;
   if(!arPlaced) return;
   if(arPtrs.size === 1){
-    /* 1 finger: op/ned = frem/tilbage på gulvet, venstre/højre = sideværts */
     const {fwd, right, dist} = arCamAxes();
     const s = dist*0.0016;
     modelGroup.position.addScaledVector(right, dx*s);
-    modelGroup.position.addScaledVector(fwd, -dy*s);
+    if(arLiftMode){
+      /* løft: op/ned = hæv/sænk hele modellen */
+      modelGroup.position.y -= dy*s;
+    } else {
+      /* flyt: op/ned = frem/tilbage på gulvet */
+      modelGroup.position.addScaledVector(fwd, -dy*s);
+    }
   } else if(arPtrs.size === 2){
     const [a,b] = [...arPtrs.values()];
     const ang = Math.atan2(b.y-a.y, b.x-a.x);
@@ -1497,6 +1506,13 @@ function arPtrEnd(e){
 arGl.addEventListener('pointerup', arPtrEnd);
 arGl.addEventListener('pointercancel', arPtrEnd);
 
+document.getElementById('arLift').addEventListener('click', function(){
+  arLiftMode = !arLiftMode;
+  this.classList.toggle('active', arLiftMode);
+  document.getElementById('arHint').textContent = arLiftMode
+    ? 'L\u00f8ft: tr\u00e6k op/ned h\u00e6ver og s\u00e6nker modellen'
+    : 'Tr\u00e6k: flyt \u00b7 knib: frem/tilbage \u00b7 drej: rot\u00e9r';
+});
 document.getElementById('arMove').addEventListener('click', ()=>{
   arPlaced = false; modelGroup.visible = false;
   document.getElementById('arHint').textContent = 'Peg på jorden og tryk for at placere terrassen 1:1';
