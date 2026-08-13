@@ -129,7 +129,7 @@
 <div id="panel">
   <header>
     <h1>Terrassebygger</h1>
-    <div class="sub">BÆNKETRIN &amp; TRAPPE · JATOBA 145 MM</div>
+    <div class="sub">BÆNKETRIN &amp; TRAPPE · JATOBA 145 MM · <span id="ver"></span></div>
   </header>
 
   <div class="sec">
@@ -256,6 +256,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 'use strict';
+const VERSION='v2.5';
+document.getElementById('ver').textContent=VERSION;
+console.log('Terrassebygger', VERSION);
 /* =========================================================
    Terrassebygger — procedural bænketrin + trappe i jatoba
    Alle mål i mm. Scene-skala: 1 unit = 1 m.
@@ -1160,6 +1163,9 @@ function exportPDF(){
 function exportPDFInner(){
   const {D, nb, totalW, frontZ} = lastBuild;
   const doc = new window.jspdf.jsPDF({orientation:'landscape', unit:'mm', format:'a4'});
+  /* værn: jsPDF afviser tal — tving alt til strenge én gang for alle */
+  const _text = doc.text.bind(doc);
+  doc.text = (t, ...a) => _text(typeof t === 'number' ? String(t) : t, ...a);
   const W=297, Hp=210, INK='#2a241a', ACC='#b35c28', DIM='#6d6455';
   const today = new Date().toLocaleDateString('da-DK');
 
