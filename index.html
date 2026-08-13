@@ -258,7 +258,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 'use strict';
-const VERSION='v2.9';
+const VERSION='v3.0';
 document.getElementById('ver').textContent=VERSION;
 console.log('Terrassebygger', VERSION);
 /* =========================================================
@@ -1159,8 +1159,10 @@ function hintFor(name){
     stair:'Trappe valgt \u2014 tr\u00e6k: bredde og trinh\u00f8jde (antal stigninger)',
     repos:'Repos valgt \u2014 tr\u00e6k: h\u00f8jde og dybde'
   };
-  document.getElementById('hint').textContent = name ? t[name]
+  const msg = name ? t[name]
     : 'tr\u00e6k \u00b7 rot\u00e9r \u00a0/\u00a0 dobbeltklik element \u00b7 h\u00e5ndtag \u00a0/\u00a0 dobbeltklik i det fri \u00b7 nulstil';
+  document.getElementById('hint').textContent = msg;
+  if(renderer.xr.isPresenting && name) document.getElementById('arHint').textContent = t[name] + ' \u2014 dobbelttryk i det fri fjerner';
 }
 function selectElem(name){
   selElem = name;
@@ -1180,15 +1182,20 @@ el.addEventListener('dblclick', e=>{
     }
   }
 });
-/* håndtags-træk: registreres EFTER orbit-lytterne, og stjæler pointeren fra orbit */
-el.addEventListener('pointerdown', e=>{
-  if(!selElem || renderer.xr.isPresenting) return;
+/* håndtags-træk — delt mellem desktop-visning og AR */
+function syncXRCam(){
+  if(renderer.xr.isPresenting){
+    camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+  }
+}
+function tryStartHandleDrag(e){
+  if(!selElem) return false;
+  syncXRCam();
   pickRC.setFromCamera(ndcOf(e), camera);
   const hits = pickRC.intersectObjects(handleGroup.children, true);
-  if(!hits.length) return;
-  pointers.delete(e.pointerId);              // orbit slipper
+  if(!hits.length) return false;
   const d = hits[0].object.userData.def;
-  /* skærm-akse: projicér håndtagets akse til pixels */
   const p0 = hits[0].object.parent.getWorldPosition(new THREE.Vector3());
   const p1 = p0.clone().addScaledVector(new THREE.Vector3(...d.axis).applyQuaternion(modelGroup.quaternion), 0.3);
   const sp = v => { const c=v.clone().project(camera); return {x:(c.x+1)/2*innerWidth, y:(1-c.y)/2*innerHeight}; };
@@ -1202,9 +1209,9 @@ el.addEventListener('pointerdown', e=>{
     startX: e.clientX, startY: e.clientY,
     startVal: d.param==='n' ? d.rs0 : P[d.param]
   };
-});
-el.addEventListener('pointermove', e=>{
-  if(!handleDrag) return;
+  return true;
+}
+function handleMove(e){
   const h = handleDrag;
   const along = ((e.clientX-h.startX)*h.ax.x + (e.clientY-h.startY)*h.ax.y) * h.mmPerPx;
   if(h.d.param === 'n'){
@@ -1220,7 +1227,12 @@ el.addEventListener('pointermove', e=>{
       rebuild();
     }
   }
+}
+el.addEventListener('pointerdown', e=>{
+  if(renderer.xr.isPresenting) return;
+  if(tryStartHandleDrag(e)) pointers.delete(e.pointerId);   // orbit slipper
 });
+el.addEventListener('pointermove', e=>{ if(handleDrag) handleMove(e); });
 el.addEventListener('pointerup', ()=>{ handleDrag=null; });
 el.addEventListener('pointercancel', ()=>{ handleDrag=null; });
 
@@ -1585,7 +1597,7 @@ function arPlace(){
   modelGroup.position.copy(hit).sub(anchor);
   modelGroup.visible = true;
   arPlaced = true;
-  document.getElementById('arHint').textContent = 'Tr\u00e6k: flyt \u00b7 knib: frem/tilbage \u00b7 drej: rot\u00e9r';
+  document.getElementById('arHint').textContent = 'Tr\u00e6k: flyt \u00b7 knib: frem/tilbage \u00b7 drej: rot\u00e9r \u00b7 dobbelttryk element: h\u00e5ndtag';
 }
 
 /* ---------- AR-gestik: 1 finger flytter, knib flytter frem/tilbage,
@@ -1672,14 +1684,21 @@ function arRotateAroundAnchor(dAng){
   const v = modelGroup.position.clone().sub(pivot).applyAxisAngle(AR_UP, dAng);
   modelGroup.position.copy(pivot).add(v);
 }
+let arLastTap = null;
 arGl.addEventListener('pointerdown', e=>{
   arGl.setPointerCapture(e.pointerId);
+  /* håndtag har førsteprioritet når et element er valgt */
+  if(arPlaced && measIdx < 0 && arPtrs.size === 0 && tryStartHandleDrag(e)){
+    arTap = null;
+    return;
+  }
   arPtrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
   if(arPtrs.size === 1){
     arTap = {x:e.clientX, y:e.clientY, t:performance.now()};
   } else { arTap=null; arAng=null; arPinch=null; }
 });
 arGl.addEventListener('pointermove', e=>{
+  if(handleDrag){ handleMove(e); return; }
   const p = arPtrs.get(e.pointerId); if(!p) return;
   const dx = e.clientX - p.x, dy = e.clientY - p.y;
   p.x = e.clientX; p.y = e.clientY;
@@ -1710,6 +1729,7 @@ arGl.addEventListener('pointermove', e=>{
   }
 });
 function arPtrEnd(e){
+  if(handleDrag){ handleDrag = null; return; }
   arPtrs.delete(e.pointerId);
   if(arPtrs.size < 2){ arAng=null; arPinch=null; }
   if(arPtrs.size === 0){
@@ -1726,7 +1746,24 @@ function arPtrEnd(e){
             document.getElementById('arHint').textContent = MEAS_STEPS[measIdx];
           }
         }
-      } else if(!arPlaced) arPlace();
+      } else if(!arPlaced){
+        arPlace();
+      } else {
+        /* placeret: dobbelttryk vælger element / fravælger i det fri */
+        const now = performance.now();
+        if(arLastTap && now-arLastTap.t < 350 &&
+           Math.hypot(arTap.x-arLastTap.x, arTap.y-arLastTap.y) < 60){
+          syncXRCam();
+          pickRC.setFromCamera(new THREE.Vector2((arTap.x/innerWidth)*2-1, -(arTap.y/innerHeight)*2+1), camera);
+          const ph = pickRC.intersectObjects(pickGroup.children);
+          selectElem(ph.length ? ph[0].object.userData.pick : null);
+          if(!ph.length) document.getElementById('arHint').textContent =
+            'Tr\u00e6k: flyt \u00b7 knib: frem/tilbage \u00b7 drej: rot\u00e9r \u00b7 dobbelttryk element: h\u00e5ndtag';
+          arLastTap = null;
+        } else {
+          arLastTap = {x:arTap.x, y:arTap.y, t:now};
+        }
+      }
     }
     arTap=null;
   }
@@ -1749,7 +1786,7 @@ document.getElementById('arLift').addEventListener('click', function(){
   this.classList.toggle('active', arLiftMode);
   document.getElementById('arHint').textContent = arLiftMode
     ? 'L\u00f8ft: tr\u00e6k op/ned h\u00e6ver og s\u00e6nker modellen'
-    : 'Tr\u00e6k: flyt \u00b7 knib: frem/tilbage \u00b7 drej: rot\u00e9r';
+    : 'Tr\u00e6k: flyt \u00b7 knib: frem/tilbage \u00b7 drej: rot\u00e9r \u00b7 dobbelttryk element: h\u00e5ndtag';
 });
 document.getElementById('arMove').addEventListener('click', ()=>{
   clearAnchors();
@@ -1832,6 +1869,14 @@ else navigator.xr.isSessionSupported('immersive-ar').then(ok=>{
 /* ---------- render-loop (XR-kompatibelt) ---------- */
 renderer.setAnimationLoop(function(t, frame){
   if(renderer.xr.isPresenting){
+    if(selElem){
+      const tv = new THREE.Vector3();
+      const cp = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+      for(const g of handleGroup.children){
+        g.getWorldPosition(tv);
+        g.scale.setScalar(Math.min(3.2, Math.max(1.0, cp.distanceTo(tv)/3)));
+      }
+    }
     if(frame && xrHitSource){
       const hits = frame.getHitTestResults(xrHitSource);
       if(hits.length && (!arPlaced || measIdx >= 0)){
