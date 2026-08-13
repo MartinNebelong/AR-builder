@@ -226,6 +226,7 @@
   <canvas id="arSketch"></canvas>
   <div id="arHint">Peg på jorden og tryk for at placere terrassen 1:1</div>
   <div id="arBtns">
+    <button id="arAnchor">Mål</button>
     <button id="arLift">Løft</button>
     <button id="arDraw">Tegn</button>
     <button id="arClear" style="display:none">Ryd</button>
@@ -257,7 +258,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 'use strict';
-const VERSION='v2.6';
+const VERSION='v2.7';
 document.getElementById('ver').textContent=VERSION;
 console.log('Terrassebygger', VERSION);
 /* =========================================================
@@ -1396,6 +1397,8 @@ function startAR(){
       xrHitSource = null; reticle.visible = false;
       drawMode = false; lastPt = null;
       arLiftMode = false;
+      clearAnchors();
+      document.getElementById('arAnchor').classList.remove('active');
       document.getElementById('arLift').classList.remove('active');
       document.getElementById('arDraw').classList.remove('active');
       document.getElementById('arClear').style.display = 'none';
@@ -1438,6 +1441,63 @@ const arPtrs = new Map();
 const AR_UP = new THREE.Vector3(0,1,0);
 let arTap=null, arAng=null, arPinch=null, arLiftMode=false;
 
+/* --- AR-opmåling: markér virkelige punkter og lås modellens mål til dem --- */
+const MEAS_STEPS = [
+  '1/6 \u00b7 Sigt og tryk: terrassens OVERKANT (d\u00e6kkets forkant)',
+  '2/6 \u00b7 Tryk: TERR\u00c6N ved trappens fod',
+  '3/6 \u00b7 Tryk: VENSTRE ende af b\u00e6nken (ved forkanten)',
+  '4/6 \u00b7 Tryk: SAMLINGEN mellem b\u00e6nk og trappe',
+  '5/6 \u00b7 Tryk: H\u00d8JRE ende af trappen',
+  '6/6 \u00b7 Tryk: d\u00e6kkets BAGKANT (mod huset)'
+];
+let measIdx = -1;
+const measPts = [];
+const anchorGroup = new THREE.Group();
+scene.add(anchorGroup);
+const pinGeo = new THREE.SphereGeometry(0.014, 12, 10);
+function addPin(p){
+  const m = new THREE.Mesh(pinGeo, lineMat);
+  m.position.copy(p);
+  anchorGroup.add(m);
+}
+function clearAnchors(){
+  measIdx = -1; measPts.length = 0;
+  while(anchorGroup.children.length) anchorGroup.remove(anchorGroup.children[0]);
+}
+function syncSlider(id, valId, val, unit){
+  const el2 = document.getElementById(id);
+  if(el2){ el2.value = val; document.getElementById(valId).textContent = val+' '+unit; }
+}
+function clampRound(v, step, lo, hi){
+  return Math.min(hi, Math.max(lo, Math.round(v/step)*step));
+}
+function applyMeasurements(){
+  const [top, bund, bL, joint, sR, back] = measPts;
+  const axis = new THREE.Vector3().subVectors(sR, bL); axis.y = 0;
+  if(axis.lengthSq() < 0.04){ clearAnchors(); document.getElementById('arHint').textContent='M\u00e5lingen var for lille \u2014 pr\u00f8v igen'; return; }
+  axis.normalize();
+  const along = p => new THREE.Vector3().subVectors(p, bL).setY(0).dot(axis);
+  const perp  = new THREE.Vector3(-axis.z, 0, axis.x);
+  const Hm      = clampRound((top.y - bund.y)*1000, 10, 600, 1400);
+  const benchWm = clampRound(along(joint)*1000, 50, 1200, 4200);
+  const stairWm = clampRound((along(sR) - along(joint))*1000, 50, 900, 3000);
+  const deckDm  = clampRound(Math.abs(new THREE.Vector3().subVectors(back, bL).setY(0).dot(perp))*1000, 50, 1000, 3200);
+  P.H = Hm; P.benchW = benchWm; P.stairW = stairWm; P.deckD = deckDm;
+  P.n = Math.min(8, Math.max(3, Math.round(Hm/(P.bw+P.gap+P.bt))));
+  syncSlider('sH','vH',P.H,'mm'); syncSlider('sN','vN',P.n,'stk.');
+  syncSlider('sBW','vBW',P.benchW,'mm'); syncSlider('sSW','vSW',P.stairW,'mm');
+  syncSlider('sDD','vDD',P.deckD,'mm');
+  rebuild();
+  /* placér modellen i ankrene: lokal x langs bredde-aksen, origo i bænkens venstre forkant, terræn = trappefod */
+  modelGroup.rotation.y = Math.atan2(-axis.z, axis.x) - 0;
+  modelGroup.position.set(bL.x, bund.y, bL.z);
+  modelGroup.visible = true;
+  arPlaced = true;
+  measIdx = -1;
+  document.getElementById('arHint').textContent =
+    'M\u00e5lt: H '+P.H+' \u00b7 b\u00e6nk '+P.benchW+' \u00b7 trappe '+P.stairW+' \u00b7 d\u00e6k '+P.deckD+' mm (\u00b1f\u00e5 cm)';
+}
+
 function arCamAxes(){
   const cp = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
   const fwd = new THREE.Vector3();
@@ -1470,7 +1530,7 @@ arGl.addEventListener('pointermove', e=>{
   const dx = e.clientX - p.x, dy = e.clientY - p.y;
   p.x = e.clientX; p.y = e.clientY;
   if(arTap && Math.hypot(e.clientX-arTap.x, e.clientY-arTap.y) > 12) arTap=null;
-  if(!arPlaced) return;
+  if(!arPlaced || measIdx >= 0) return;
   if(arPtrs.size === 1){
     const {fwd, right, dist} = arCamAxes();
     const s = dist*0.0016;
@@ -1499,13 +1559,37 @@ function arPtrEnd(e){
   arPtrs.delete(e.pointerId);
   if(arPtrs.size < 2){ arAng=null; arPinch=null; }
   if(arPtrs.size === 0){
-    if(arTap && performance.now()-arTap.t < 350 && !arPlaced) arPlace();
+    if(arTap && performance.now()-arTap.t < 350){
+      if(measIdx >= 0){
+        if(reticle.visible){
+          measPts.push(new THREE.Vector3().setFromMatrixPosition(reticle.matrix));
+          addPin(measPts[measPts.length-1]);
+          measIdx++;
+          if(measIdx >= MEAS_STEPS.length){
+            document.getElementById('arAnchor').classList.remove('active');
+            applyMeasurements();
+          } else {
+            document.getElementById('arHint').textContent = MEAS_STEPS[measIdx];
+          }
+        }
+      } else if(!arPlaced) arPlace();
+    }
     arTap=null;
   }
 }
 arGl.addEventListener('pointerup', arPtrEnd);
 arGl.addEventListener('pointercancel', arPtrEnd);
 
+document.getElementById('arAnchor').addEventListener('click', function(){
+  if(measIdx >= 0){ clearAnchors(); this.classList.remove('active');
+    document.getElementById('arHint').textContent = 'Opm\u00e5ling annulleret';
+    return; }
+  clearAnchors();
+  measIdx = 0;
+  this.classList.add('active');
+  modelGroup.visible = false;
+  document.getElementById('arHint').textContent = MEAS_STEPS[0];
+});
 document.getElementById('arLift').addEventListener('click', function(){
   arLiftMode = !arLiftMode;
   this.classList.toggle('active', arLiftMode);
@@ -1514,6 +1598,8 @@ document.getElementById('arLift').addEventListener('click', function(){
     : 'Tr\u00e6k: flyt \u00b7 knib: frem/tilbage \u00b7 drej: rot\u00e9r';
 });
 document.getElementById('arMove').addEventListener('click', ()=>{
+  clearAnchors();
+  document.getElementById('arAnchor').classList.remove('active');
   arPlaced = false; modelGroup.visible = false;
   document.getElementById('arHint').textContent = 'Peg på jorden og tryk for at placere terrassen 1:1';
 });
@@ -1556,13 +1642,25 @@ document.getElementById('arClear').addEventListener('click', ()=>{
   sctx.save(); sctx.setTransform(1,0,0,1,0,0);
   sctx.clearRect(0,0,sketch.width,sketch.height); sctx.restore();
 });
+function captureTo2D(){
+  /* i XR tegnes der til XR-framebufferen — slå XR fra ét frame og render til canvas */
+  const xrOn = renderer.xr.isPresenting;
+  if(xrOn){
+    camera.matrixWorld.decompose(camera.position, camera.quaternion, camera.scale);
+    renderer.xr.enabled = false;
+  }
+  renderer.render(scene, camera);
+  if(xrOn) renderer.xr.enabled = true;
+  return renderer.domElement;
+}
 document.getElementById('arShot').addEventListener('click', ()=>{
+  const src = captureTo2D();
   const c = document.createElement('canvas');
-  c.width = renderer.domElement.width; c.height = renderer.domElement.height;
+  c.width = src.width; c.height = src.height;
   const ctx = c.getContext('2d');
   ctx.fillStyle = '#14110c';
   ctx.fillRect(0,0,c.width,c.height);
-  try{ ctx.drawImage(renderer.domElement, 0,0,c.width,c.height); }catch(e){}
+  try{ ctx.drawImage(src, 0,0,c.width,c.height); }catch(e){}
   ctx.drawImage(sketch, 0,0,c.width,c.height);
   const a = document.createElement('a');
   a.download = 'terrasse-ar-skitse-'+Date.now()+'.png';
@@ -1582,7 +1680,7 @@ renderer.setAnimationLoop(function(t, frame){
   if(renderer.xr.isPresenting){
     if(frame && xrHitSource){
       const hits = frame.getHitTestResults(xrHitSource);
-      if(hits.length && !arPlaced){
+      if(hits.length && (!arPlaced || measIdx >= 0)){
         const pose = hits[0].getPose(renderer.xr.getReferenceSpace());
         reticle.visible = true;
         reticle.matrix.fromArray(pose.transform.matrix);
